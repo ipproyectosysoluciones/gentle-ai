@@ -609,7 +609,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 	}
 	switch transition.ReasonCode {
-	case "correction_plan_required":
+	case "correction_plan_required", "corrected_candidate_unavailable":
 		if len(transition.Collect.Inputs) != 1 {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}

@@ -1334,19 +1334,18 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								}
 							}
 						}
-						if artifactErr == nil && *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
+						// Derive repository_context for correction plan submission even if validation request building failed.
+						// The correction plan needs a fresh repository_context bound to the current CapturePhaseRevision
+						// (which advances when BeginCorrection is called), independent of targeted validation readiness.
+						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
 							contextTarget := record.State.CurrentSnapshot.Identity
 							if validationRequest != nil {
 								contextTarget = validationRequest.CorrectionTargetIdentity
-								repositoryContext, artifactErr = reviewtransaction.DeriveReviewRepositoryContextHandle(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
-									LineageID: record.State.LineageID, TargetIdentity: contextTarget, Revision: record.State.CapturePhaseRevision,
-								})
-							} else {
-								repositoryContext, artifactErr = reviewtransaction.DeriveReviewRepositoryContextHandle(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
-									LineageID: record.State.LineageID, TargetIdentity: contextTarget, Revision: record.State.CapturePhaseRevision,
-								})
 							}
-							if artifactErr == nil {
+							repositoryContext, _ = reviewtransaction.DeriveReviewRepositoryContextHandle(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
+								LineageID: record.State.LineageID, TargetIdentity: contextTarget, Revision: record.State.CapturePhaseRevision,
+							})
+							if repositoryContext != "" {
 								result.RepositoryContext = &ReviewRepositoryContextReference{
 									Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContext,
 									Revision: record.State.CapturePhaseRevision, TargetIdentity: contextTarget,

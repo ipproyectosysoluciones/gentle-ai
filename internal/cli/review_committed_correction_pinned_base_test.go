@@ -163,12 +163,19 @@ func committedCorrectionStatusAfterCommit(t *testing.T, evidence reviewtransacti
 		t.Fatalf("capture correction plan: %v\n%s", err, planOutput.String())
 	}
 
-	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 2\n}\n", 0o644)
-	uncommitted := boundStatus("with the uncommitted correction")
-	if uncommitted.NextTransition == nil || uncommitted.NextTransition.Kind != reviewNextTransitionStop ||
-		uncommitted.NextTransition.ReasonCode != "corrected_candidate_unavailable" {
-		t.Fatalf("bound STATUS with the uncommitted correction = %#v, want stop corrected_candidate_unavailable", uncommitted.NextTransition)
-	}
+writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 2\n}\n", 0o644)
+uncommitted := boundStatus("with the uncommitted correction")
+// After a correction plan is captured, the candidate is still unchanged.
+// STATUS now returns a collect transition for corrected_candidate_unavailable
+// with a fresh repository_context so the user can submit another correction
+// plan if needed (CapturePhaseRevision advanced on BeginCorrection).
+if uncommitted.NextTransition == nil || uncommitted.NextTransition.Kind != reviewNextTransitionCollect ||
+    uncommitted.NextTransition.ReasonCode != "corrected_candidate_unavailable" ||
+    uncommitted.NextTransition.Collect == nil || len(uncommitted.NextTransition.Collect.Inputs) != 1 ||
+    uncommitted.NextTransition.Collect.Inputs[0].CaptureOperation != reviewCaptureCorrectionPlanOperation {
+    t.Fatalf("bound STATUS with the uncommitted correction = %#v, want collect corrected_candidate_unavailable with review.capture-correction-plan", uncommitted.NextTransition)
+}
+
 
 	if companionTest {
 		// The admitted companion test path (#3375): a correction may add a
