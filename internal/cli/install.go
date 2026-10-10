@@ -36,8 +36,8 @@ func PrintInstallHelp(w io.Writer) {
 FLAGS
   --agent, --agents <list>           Agents to install
   --component, --components <list>   Components to install
-  --skill, --skills <list>           Skills to install
-  --persona <name>                   Persona to apply
+  --skill, --skills <list>           Skills to install (requires skills in the resolved plan)
+  --persona <name>                   Persona to apply (requires persona in the resolved plan, except custom)
   --preset <name>                    Preset to apply
   --scope global|workspace           Install scope (env: GENTLE_AI_INSTALL_SCOPE)
   --channel stable|beta|nightly      Release channel; nightly is an alias for beta (env: GENTLE_AI_CHANNEL)
@@ -51,6 +51,10 @@ FLAGS
                                      under ~/.claude/gentle-ai/orchestrator/ (default off; see docs/rollback.md)
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
+
+ORPHAN MODIFIERS
+  Rerun gentle-ai install with the required consumer added to your existing
+  component list, or remove the modifier. Components are not added automatically.
 `)
 }
 

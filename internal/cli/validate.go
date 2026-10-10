@@ -106,6 +106,36 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun, ClaudeOrchestratorModules: flags.ClaudeOrchestratorModules}, nil
 }
 
+// validateInstallModifierConsumers checks explicit payloads against the final plan,
+// after dependency expansion. Implicit defaults and custom persona opt-out do not
+// request a component payload.
+func validateInstallModifierConsumers(flags InstallFlags, selection model.Selection, components []model.ComponentID) error {
+	modifiers := []struct {
+		flag     string
+		explicit bool
+		consumer model.ComponentID
+	}{
+		{"--persona", strings.TrimSpace(flags.Persona) != "" && selection.Persona != model.PersonaCustom, model.ComponentPersona},
+		{"--skill/--skills", len(flags.Skills) > 0, model.ComponentSkills},
+	}
+	for _, modifier := range modifiers {
+		if !modifier.explicit {
+			continue
+		}
+		found := false
+		for _, component := range components {
+			if component == modifier.consumer {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("%s requires component %s in the resolved install plan; rerun gentle-ai install with --component %s added to your existing component list, or remove %s", modifier.flag, modifier.consumer, modifier.consumer, modifier.flag)
+		}
+	}
+	return nil
+}
+
 // personaAliasRemapNotice is printed whenever the legacy
 // gentleman-neutral-artifacts alias is remapped to the neutral persona.
 const personaAliasRemapNotice = `"gentleman-neutral-artifacts" now maps to "neutral". For a voseo conversation use --persona gentleman.`

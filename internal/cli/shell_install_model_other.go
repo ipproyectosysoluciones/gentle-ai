@@ -25,6 +25,10 @@ type shellInstallModel struct {
 	err       error
 }
 
+func newShellInstallSelectionModel(cancel context.CancelFunc) shellInstallModel {
+	return shellInstallModel{cancel: cancel, req: shellinstaller.UserInstallRequest{Mode: "separate"}}
+}
+
 func (m shellInstallModel) Init() tea.Cmd { return nil }
 
 func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

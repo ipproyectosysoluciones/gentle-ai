@@ -50,6 +50,7 @@ func newRestoreFlagSet(list, yes *bool) *flag.FlagSet {
 		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
 		fmt.Fprintln(fs.Output(), "  gentle-ai restore [--list | latest | <id>] [--yes]")
 		fmt.Fprintln(fs.Output(), "  -- ends flag parsing; at most one backup target is accepted")
+		fmt.Fprintln(fs.Output(), "  CODEX_HOME may authorize its existing directory for CLI restore, not its parent")
 		fs.PrintDefaults()
 	}
 	return fs
@@ -250,9 +251,7 @@ func backupRootDir(homeDir string) string {
 	return homeDir + "/.gentle-ai/backups"
 }
 
-// defaultRestorer returns the standard backup.RestoreService.Restore function.
+// defaultRestorer authorizes the current validated Codex root for managed backups.
 func defaultRestorer() RestoreFunc {
-	return func(m backup.Manifest) error {
-		return backup.RestoreService{}.Restore(m)
-	}
+	return RestoreManagedBackup
 }

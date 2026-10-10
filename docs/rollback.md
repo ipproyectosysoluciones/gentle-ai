@@ -76,6 +76,10 @@ At most one target is accepted. For example, `restore -- latest` still requires
 confirmation, while `restore latest -- --yes=true` returns a usage error without
 restoring because it supplies two targets.
 
+### Codex configuration outside the user home
+
+For CLI restore of a backup written to an external `CODEX_HOME`, keep `CODEX_HOME` pointing to that same existing directory. CLI restore authorizes that validated directory and its current `CODEX_HOME` symlink spelling, not their parents; unrelated destinations and symlink escapes remain refused. TUI restore and automatic rollback still use their existing scopes.
+
 ### Restored files
 
 - If `existed=true`: restores the file from the snapshot to its original path

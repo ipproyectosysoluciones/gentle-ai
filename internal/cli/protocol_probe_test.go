@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
@@ -137,6 +138,10 @@ func TestMain(m *testing.M) {
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
 	}
+	// Go derives its module and build caches from HOME. Pin them to the
+	// developer's existing caches before HOME moves, so tests that build the
+	// real CLI (TestCursorJudgmentDayCLISmoke) never need the network.
+	pinGoCachesBeforeHomeIsolation()
 	testHome, err := os.MkdirTemp("", "gentle-ai-cli-test-home-*")
 	if err != nil {
 		panic(err)
@@ -185,4 +190,22 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(testHome)
 	os.Exit(code)
+}
+
+// pinGoCachesBeforeHomeIsolation keeps explicit GOPATH/GOMODCACHE/GOCACHE
+// values and otherwise records Go's HOME-derived defaults as explicit values,
+// so swapping HOME for a temporary directory does not empty the caches.
+func pinGoCachesBeforeHomeIsolation() {
+	if home, err := os.UserHomeDir(); err == nil && os.Getenv("GOPATH") == "" {
+		if err := os.Setenv("GOPATH", filepath.Join(home, "go")); err != nil {
+			panic(err)
+		}
+	}
+	if os.Getenv("GOCACHE") == "" {
+		if cache, err := os.UserCacheDir(); err == nil {
+			if err := os.Setenv("GOCACHE", filepath.Join(cache, "go-build")); err != nil {
+				panic(err)
+			}
+		}
+	}
 }

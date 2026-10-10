@@ -17,15 +17,21 @@ type shellInstallDone struct{ err error }
 
 // Windows Separate review model with a stable/main channel selector.
 type shellInstallModel struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	self   string
-	stdout io.Writer
-	req    shellinstaller.UserInstallRequest
-	field  int
-	review bool
-	busy   bool
-	err    error
+	ctx           context.Context
+	cancel        context.CancelFunc
+	self          string
+	stdout        io.Writer
+	req           shellinstaller.UserInstallRequest
+	field         int
+	review        bool
+	busy          bool
+	selectionOnly bool
+	confirmed     bool
+	err           error
+}
+
+func newShellInstallSelectionModel(cancel context.CancelFunc) shellInstallModel {
+	return shellInstallModel{cancel: cancel, selectionOnly: true, req: shellinstaller.UserInstallRequest{Mode: "separate", Channel: "stable"}}
 }
 
 func (m shellInstallModel) Init() tea.Cmd { return nil }
@@ -41,6 +47,7 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if key.String() == "ctrl+c" || key.String() == "esc" {
 		m.cancel()
+		m.confirmed = false
 		if m.busy {
 			return m, nil // Await actual stop/reap; never abandon the install goroutine.
 		}
@@ -62,6 +69,10 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.String() != "y" {
 			m.review = false
 			return m, nil
+		}
+		if m.selectionOnly {
+			m.confirmed = true
+			return m, tea.Quit
 		}
 		m.busy = true
 		return m, func() tea.Msg {
