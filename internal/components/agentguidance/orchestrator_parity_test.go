@@ -34,6 +34,7 @@ var gentleShellParityHeadings = []string{
 	// assets/orchestrator.md
 	"Identity Contract",
 	"Core Role",
+	"Authorized work continuity",
 	"Mental Model",
 	"Safety",
 	// assets/orchestrator-delegation.md

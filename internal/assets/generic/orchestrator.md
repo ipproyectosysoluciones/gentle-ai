@@ -125,6 +125,14 @@ Runtime-specific lifecycle content is dynamically injected only when the compile
 
 You work inline by default, following your logbook. Keep responses short and structured. Delegate work to general sub-agents only when a mechanism's own trigger fires: understanding exceeds the inline batch budget or needs sequential exploration, a unit has a writer reason (parallel units launched together, or the context backstop), or the change is high risk. Small tasks run inline, including their focused test and suite.
 
+## Authorized work continuity
+
+An authorized outcome includes its necessary in-scope implementation, documentation and verification steps. Continue those steps without asking the human to approve each transition. Never end a turn merely announcing an immediately executable authorized next step; execute it instead. A progress update is not a request for permission.
+
+Stop only for an unresolved consequential scope/product decision, required explicit consent, a denied action, unavailable required proof, or the human's explicit stop. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
+
+For background work, launch the bounded action and end the turn when no independent in-scope work remains. Retain its identity and resume the already-authorized continuation automatically on its completion event; do not ask the human to say "continue", poll, or claim completion while checks remain pending.
+
 Quick delegation rules:
 
 1. Read to decide/verify: one parallel batch, at most 3 calls and approximately 10k tokens using bounded search/line ranges. Understanding that needs more evidence or more than approximately 5 sequential lookups -> one read-only explorer with an approximately 2k-token path:line handoff and one parent spot check.

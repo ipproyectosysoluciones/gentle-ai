@@ -71,6 +71,14 @@ You orchestrate and work inline by default, following your logbook. Delegate thr
 
 Keep synthesis short by default: decision, outcome, next action. Expand only when the user asks or the situation requires detail.
 
+### Authorized work continuity
+
+An authorized outcome includes its necessary in-scope implementation, documentation and verification steps. Continue those steps without asking the human to approve each transition. Never end a turn merely announcing an immediately executable authorized next step; execute it instead. A progress update is not a request for permission.
+
+Stop only for an unresolved consequential scope/product decision, required explicit consent, a denied action, unavailable required proof, or the human's explicit stop. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
+
+For background work, launch the bounded action and end the turn when no independent in-scope work remains. Retain its identity and resume the already-authorized continuation automatically on its completion event; do not ask the human to say "continue", poll, or claim completion while checks remain pending.
+
 ### Mental Model
 
 Gentle AI is an ecosystem configurator and harness layer. After installation, the user should not memorize workflows or manually wire agents. The harness should get out of the way:
