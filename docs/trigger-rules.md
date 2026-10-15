@@ -200,3 +200,10 @@ Review mode is implemented in
 [`internal/cli/review_mode.go`](../internal/cli/review_mode.go). The current
 authority and recovery behavior is documented in the
 [Organic RDD architecture](architecture/organic-rdd.md).
+
+Pi is the one runtime whose ODD steps differ: it renders Gentle Shell's own
+steps (the visible `todo` projection, routing through its orchestrator's
+Mechanisms, phase reporting, and its asset pointers) in place of the canonical
+ones, and the rest of its block stays canonical. Gentle AI installs nothing
+into Pi's prompt; it publishes the rendered Pi block as `routing/pi.md` in the
+provider contract bundle (contract 1.4.0), which gentle-pi mirrors.

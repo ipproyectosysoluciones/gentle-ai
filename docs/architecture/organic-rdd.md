@@ -71,7 +71,7 @@ Review completion is evidence about the completed transaction, not delivery auth
 
 ## Runtime boundary
 
-The atomic lifecycle is rendered only for Claude Code, OpenCode, Codex, and Pi. Generic and non-RDD runtime guidance keeps ODD routing and makes no review-transport promise. Pi receives the review execution contract through `orchestration/pi.md` in the provider contract bundle, which gentle-pi mirrors and injects at session start; gentle-ai writes nothing into the Pi system prompt.
+The atomic lifecycle is rendered only for Claude Code, OpenCode, Codex, and Pi. Generic and non-RDD runtime guidance keeps ODD routing and makes no review-transport promise. Pi receives the review execution contract through `orchestration/pi.md` in the provider contract bundle, which gentle-pi mirrors and injects at session start; gentle-ai writes nothing into the Pi system prompt. The same bundle carries Pi's rendered ODD routing block as `routing/pi.md` (contract 1.4.0), so gentle-pi consumes the routing canon from gentle-ai instead of a hand copy.
 
 ## Historical compatibility
 
