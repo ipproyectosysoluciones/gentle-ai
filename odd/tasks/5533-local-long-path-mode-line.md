@@ -13,7 +13,7 @@ Branch: `fix/5533-local-long-path-mode-line` (worktree `/home/gentleman/work/gen
 
 | ID | Specs | Route | Status | Commit |
 |----|-------|-------|--------|--------|
-| T1 | S1-S3 (reopened L3: S2 correction) | delegated (Writer trigger: parallel units with gentle-shell #2285) | done | dd3f1ba7 (L2) + S2 correction commit (L4) |
+| T1 | S1-S3 (reopened L3: S2 correction) | delegated (Writer trigger: parallel units with gentle-shell #2285) | done, verified (L5) | dd3f1ba7, 3ceb351e |
 
 Risk: item 2 (review authority guard) → independent verifier after T1.
 
@@ -32,3 +32,4 @@ Risk: item 2 (review authority guard) → independent verifier after T1.
   - GREEN: that test passes, together with every `TestReviewMode*` test (including `TestReviewModeFailedMutationReportsTheModeAsUnavailable` and `TestReviewModeCloneEnableExplainsExplicitGlobalOff`).
   - Differential vs base 7550c26f (L2 matrix plus the partial-apply repro, `revision` masked): the partially applied `enable --scope clone` is byte-identical to base; the only differences are failed clone `enable|disable` lines now `unavailable`. Advisory: `enable --scope global` on an unvalidatable common dir writes the global value but returns the fail-closed projection (`clone_local`, both unset), so it stays `unavailable` (base: `off (decided by clone_local)`).
   - Verification: `go build ./...` ok; `GOOS=windows go vet ./internal/reviewtransaction/... ./internal/cli/...` ok; `go run ./internal/gofmtcheck` ok; `go test ./internal/reviewtransaction/... ./internal/cli/...` → cli ok, reviewtransaction fails only the two known environmental snapshot tests.
+- **L5** (2026-10-15) Recheck limited to the L3 blocker on 3ceb351e: fixed. Partial apply output is byte-identical to baseline (text and --json); failed clone enable/disable still print only `unavailable`; successful mutations and the RDDDisabledError path are identical to baseline; JSON unchanged everywhere; `go test ./internal/cli/...` ok. `reviewModeStatusResolved` classifies every `rddModeStatus` shape as resolved and every `failedClosedRDDModeStatus` projection as unresolved. Advisories (no change): `enable --scope global` on an unvalidatable common dir writes the global value but prints `unavailable`; a stale `--expected-revision` also prints `unavailable` (baseline printed `off (decided by clone_local)`); the continuation for a local `\\?\C:\` path still suggests a local NTFS/ReFS volume rather than the drive-letter form.
