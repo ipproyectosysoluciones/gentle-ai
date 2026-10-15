@@ -15,7 +15,7 @@ Branch: `fix/4670-rdd-off-unc` (worktree `/home/gentleman/work/gentle-ai-4670`, 
 
 | ID | Specs | Route | Status | Commit |
 |----|-------|-------|--------|--------|
-| T1 | S1-S5 | delegated (Writer trigger: parallel units with gentle-pi YOLO waiver) | done | `fix(review): skip RAR authority validation when RDD is off (#4670)` |
+| T1 | S1-S5 | delegated (Writer trigger: parallel units with gentle-pi YOLO waiver) | done, verified (L5) | dc79ccd2 |
 
 Risk: item 2 (review authority/fail-closed guard) → independent verifier after T1.
 
@@ -30,3 +30,4 @@ Risk: item 2 (review authority/fail-closed guard) → independent verifier after
   - GREEN: same focused commands `ok`; `go build ./...` ok; `GOOS=windows go vet ./internal/reviewtransaction/... ./internal/cli/...` ok; `GOOS=windows go test -c ./internal/reviewtransaction/` ok. `go test ./internal/reviewtransaction/... ./internal/cli/...`: cli ok; reviewtransaction fails only `TestSnapshotIndexTemporaryPlacementAndCleanup` and `TestSnapshotInspectionPreservesGitDirectoryMetadataWithUsableProcessTemp`, both reproduced on a clean 4b65ee67 scratch copy. `go test ./...`: additionally `internal/shellinstaller` `TestUserFrozenLockAcquisition` and `TestUserManagerCapabilityHelperUsesExecutableCustody`, both reproduced at base.
   - Differential (scratch binaries, isolated HOME, fresh local repo): `review mode status` text+JSON for default-on, global-off, global-off + clone off, global-on + clone off, byte-identical base vs branch. With a symlinked `.git/gentle-ai`: base printed `off (decided by clone_local)` + error in both modes; branch prints `unavailable` + the same error (default-on) and `off (decided by global)`, exit 0 (global off).
   - Size: ~620 authored lines (about 390 of them tests), above the ~400 planning heuristic; kept as one work unit because the typed error, the resolver change, and the CLI surfaces only make sense together.
+- **L5** (2026-10-15) Independent verifier on dc79ccd2: S1-S5 PASS, no blockers; S2 probe stopping at `rar-authority` judged acceptable (stricter, keeps #5112/#3416). Base vs HEAD status/hook byte-identical in normal repos (revision field varies per run). Known environmental failures also failing at base 4b65ee67: TestSnapshotIndexTemporaryPlacementAndCleanup, TestSnapshotInspectionPreservesGitDirectoryMetadataWithUsableProcessTemp, shellinstaller TestUserFrozenLockAcquisition, TestUserManagerCapabilityHelperUsesExecutableCustody. Advisories (follow-ups): `\\?\C:` local paths flagged Remote by pre-existing isUNCPath; failed `disable --scope clone` on an unvalidatable dir prints `off (decided by clone_local)`; default-on START on an unvalidatable dir prints the consent-latch line before failing closed.
