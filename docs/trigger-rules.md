@@ -206,4 +206,4 @@ steps (the visible `todo` projection, routing through its orchestrator's
 Mechanisms, phase reporting, and its asset pointers) in place of the canonical
 ones, and the rest of its block stays canonical. Gentle AI installs nothing
 into Pi's prompt; it publishes the rendered Pi block as `routing/pi.md` in the
-provider contract bundle (contract 1.4.0), which gentle-pi mirrors.
+provider contract bundle (contract 1.4.0), for gentle-pi to mirror in a follow-up change.
