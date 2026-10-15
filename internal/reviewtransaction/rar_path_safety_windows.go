@@ -828,13 +828,26 @@ func (e errUnsupportedWindowsFilesystemType) Is(target error) bool {
 	return false
 }
 
+// As projects the refusal onto the exported #4670 type, so a caller outside
+// this package can name the continuation without matching Windows internals.
+func (e errUnsupportedWindowsFilesystemType) As(target any) bool {
+	return asUnsupportedAuthorityFilesystem(target, &UnsupportedAuthorityFilesystemError{Path: e.path, Filesystem: e.fstype})
+}
+
 type errUnknownWindowsFilesystemType struct {
-	path     string
-	reason   string
+	path   string
+	reason string
+	// remote marks an SMB/UNC path or a mapped network drive: the volume is
+	// known to be remote, so the refusal names the continuations that change
+	// the outcome instead of asking the operator to check a correct path.
+	remote   bool
 	innerErr error
 }
 
 func (e errUnknownWindowsFilesystemType) Error() string {
+	if e.remote {
+		return (&UnsupportedAuthorityFilesystemError{Path: e.path, Remote: true, Reason: e.reason}).Error()
+	}
 	message := fmt.Sprintf(
 		"RAR authority parent %q is on an unknown filesystem; cannot assume NTFS semantics; check the path and rerun",
 		e.path,
@@ -856,6 +869,21 @@ func (e errUnknownWindowsFilesystemType) Is(target error) bool {
 	return false
 }
 
+// As projects the refusal onto the exported #4670 type; see the unsupported
+// variant above.
+func (e errUnknownWindowsFilesystemType) As(target any) bool {
+	return asUnsupportedAuthorityFilesystem(target, &UnsupportedAuthorityFilesystemError{Path: e.path, Remote: e.remote, Reason: e.reason})
+}
+
+func asUnsupportedAuthorityFilesystem(target any, refusal *UnsupportedAuthorityFilesystemError) bool {
+	typed, ok := target.(**UnsupportedAuthorityFilesystemError)
+	if !ok {
+		return false
+	}
+	*typed = refusal
+	return true
+}
+
 var errUnsupportedWindowsFilesystem = errUnsupportedWindowsFilesystemType{innerErr: errUnsafeRARAuthorityPath}
 var errUnknownWindowsFilesystem = errUnknownWindowsFilesystemType{innerErr: errUnsafeRARAuthorityPath}
 
@@ -865,7 +893,7 @@ var errUnknownWindowsFilesystem = errUnknownWindowsFilesystemType{innerErr: errU
 
 func formatWindowsRARAuthorityRefusal(path string) error {
 	if isUNCPath(path) {
-		return errUnknownWindowsFilesystemType{path: path, innerErr: errUnsafeRARAuthorityPath}
+		return errUnknownWindowsFilesystemType{path: path, remote: true, innerErr: errUnsafeRARAuthorityPath}
 	}
 	fstype, driveType, probeErr := rarWindowsAuthorityFilesystemClassifier(path)
 	class, reason := classifyWindowsAuthorityFilesystem(fstype, driveType, probeErr)
@@ -878,7 +906,8 @@ func formatWindowsRARAuthorityRefusal(path string) error {
 	case windowsAuthorityFilesystemUnsupported:
 		return errUnsupportedWindowsFilesystemType{path: path, fstype: fstype, innerErr: errUnsafeRARAuthorityPath}
 	default:
-		return errUnknownWindowsFilesystemType{path: path, reason: reason, innerErr: errUnsafeRARAuthorityPath}
+		remote := probeErr == nil && driveType == windows.DRIVE_REMOTE
+		return errUnknownWindowsFilesystemType{path: path, reason: reason, remote: remote, innerErr: errUnsafeRARAuthorityPath}
 	}
 }
 
@@ -890,7 +919,7 @@ func formatRARAuthorityRefusal(path string) error { return formatWindowsRARAutho
 
 func validateRARRepositoryParent(path string) error {
 	if isUNCPath(path) {
-		return errUnknownWindowsFilesystemType{path: path, innerErr: errUnsafeRARAuthorityPath}
+		return errUnknownWindowsFilesystemType{path: path, remote: true, innerErr: errUnsafeRARAuthorityPath}
 	}
 	before, err := os.Lstat(path)
 	if err != nil {

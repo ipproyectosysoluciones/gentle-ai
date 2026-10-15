@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1044,5 +1047,86 @@ func TestReviewModeCloneScopeEnableInheritsDefaultOnWhileGlobalUnset(t *testing.
 	}
 	if got := output.String(); !strings.Contains(got, "receipt-driven development: on (decided by global)") || strings.Contains(got, "note:") {
 		t.Fatalf("clone enable while global is on must report on without a note:\n%s", got)
+	}
+}
+
+// unvalidatableReviewModeSwitchRoot leaves an override directory where this
+// clone's switch reads it, reached through a symlinked gentle-ai ancestor
+// that RAR path validation refuses. It is the portable stand-in for a #4670
+// common directory the authority checks cannot accept.
+func unvalidatableReviewModeSwitchRoot(t *testing.T, repo string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege Windows runners do not grant; the UNC refusal is covered in reviewtransaction")
+	}
+	target := filepath.Join(t.TempDir(), "gentle-ai")
+	if err := os.MkdirAll(filepath.Join(target, "review-mode", "rar-authority", "v1", "rdd-mode"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(repo, ".git", "gentle-ai")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// #4670: with the global mode off nothing has to be read from the clone, so an
+// unvalidatable clone-local location must not make status fail.
+func TestReviewModeStatusGlobalOffSucceedsWhenTheCloneOverrideCannotBeValidated(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := RunReviewMode([]string{"disable", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	unvalidatableReviewModeSwitchRoot(t, repo)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", repo}, &output); err != nil {
+		t.Fatalf("status with global off failed: %v\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "receipt-driven development: off (decided by global)") {
+		t.Fatalf("status output = %q, want off decided by global", output.String())
+	}
+}
+
+// #4670 S4: a resolution failure is not a clone-local decision. Status still
+// fails closed while the global mode is unset, but it says the mode is
+// unavailable instead of printing an "off (decided by clone_local)" that no
+// stored record made.
+func TestReviewModeStatusReportsAFailedResolutionAsUnavailable(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	unvalidatableReviewModeSwitchRoot(t, repo)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", repo}, &output); err == nil {
+		t.Fatalf("status resolved an unvalidatable override without an error:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "decided by") {
+		t.Fatalf("failed resolution reported a deciding source: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "receipt-driven development: unavailable") {
+		t.Fatalf("status output = %q, want the mode marked unavailable", output.String())
+	}
+}
+
+// #4670 S3: an authority filesystem that cannot keep review state private is
+// a typed refusal whose continuation the operator can actually run.
+func TestReviewModeUnsupportedAuthorityFilesystemNamesItsContinuation(t *testing.T) {
+	path := `\\server\share\repo\.git`
+	cause := fmt.Errorf("resolve review mode: %w",
+		&reviewtransaction.UnsupportedAuthorityFilesystemError{Path: path, Remote: true})
+
+	err := reviewModeUnreadable(context.Background(), t.TempDir(), reviewtransaction.RDDGlobalMode{}, cause)
+
+	var unsupported *reviewtransaction.UnsupportedAuthorityFilesystemError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("refusal lost its typed cause: %#v", err)
+	}
+	for _, want := range []string{path, "`gentle-ai review mode disable --scope global`", "local NTFS or ReFS volume"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not contain %q", err.Error(), want)
+		}
+	}
+	if strings.Contains(err.Error(), "check the path and rerun") {
+		t.Fatalf("refusal %q still names an unrunnable repair", err.Error())
 	}
 }

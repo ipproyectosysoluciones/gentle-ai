@@ -94,7 +94,11 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	} else {
 		result.Status, err = applyReviewMode(ctx, *cwd, operation, selectedScope, *expectedRevision, revisionProvided)
 	}
-	if emitErr := emitReviewMode(stdout, result, *emitJSON); emitErr != nil && err == nil {
+	// #4670: a status that could not be resolved carries the fail-closed
+	// projection, not a decision, so the human surface must not render it as
+	// one.
+	unavailable := operation == "status" && err != nil
+	if emitErr := emitReviewMode(stdout, result, *emitJSON, unavailable); emitErr != nil && err == nil {
 		return emitErr
 	}
 	return err
@@ -297,6 +301,31 @@ func (err *reviewModePrivateModeIneffectiveError) Error() string {
 	)
 }
 
+// reviewModeUnsupportedFilesystemError is the #4670 refusal for a Git common
+// directory on a filesystem that cannot keep review authority private, an
+// SMB/UNC share being the reported instance. Like the #5112 refusal above, it
+// replaces a repair the operator cannot perform -- the path is already
+// correct, the volume is not -- with the continuations that change the
+// outcome. It wraps the typed cause, so the fail-closed decision is untouched.
+type reviewModeUnsupportedFilesystemError struct {
+	Refusal *reviewtransaction.UnsupportedAuthorityFilesystemError
+	Cause   error
+}
+
+func (err *reviewModeUnsupportedFilesystemError) Unwrap() error { return err.Cause }
+
+func (err *reviewModeUnsupportedFilesystemError) Error() string {
+	return "the clone-local review mode is unavailable: " + err.Refusal.Error()
+}
+
+func reviewModeUnsupportedFilesystemRefusal(err error) error {
+	var unsupported *reviewtransaction.UnsupportedAuthorityFilesystemError
+	if !errors.As(err, &unsupported) {
+		return nil
+	}
+	return &reviewModeUnsupportedFilesystemError{Refusal: unsupported, Cause: err}
+}
+
 func reviewModeUnsafePathRefusal(err error) error {
 	var unsafePath *reviewtransaction.UnsafeRARPathError
 	if errors.As(err, &unsafePath) {
@@ -349,6 +378,9 @@ func reviewModeUnreadable(
 ) error {
 	if err == nil {
 		return nil
+	}
+	if unsupported := reviewModeUnsupportedFilesystemRefusal(err); unsupported != nil {
+		return unsupported
 	}
 	if unsafePath := reviewModeUnsafePathRefusal(err); unsafePath != nil {
 		return unsafePath
@@ -480,13 +512,20 @@ func writeGlobalRDDMode(operation string) error {
 	})
 }
 
-func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) error {
+func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool, unavailable bool) error {
 	if emitJSON {
 		payload, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(stdout, "%s\n", payload)
+		return err
+	}
+	if unavailable {
+		// The failed-closed projection names a source only because the type
+		// requires one; printing it read as "off (decided by clone_local)"
+		// beside "clone-local: unset", a decision no stored record made.
+		_, err := fmt.Fprint(stdout, "receipt-driven development: unavailable (the review mode could not be resolved)\n")
 		return err
 	}
 	_, err := fmt.Fprintf(

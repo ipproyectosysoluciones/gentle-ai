@@ -9,7 +9,7 @@
 
 ## RDD defaults to ON
 
-RDD is on by default and opt-out. With no configured preference, status reports `effective: on, source: default` without saving a user decision. Explicit global or clone-local OFF wins; use `gentle-ai review mode disable` to opt out. Automation must not toggle the mode or persist a preference on the user's behalf. Candidate consent is separate, and delivery always follows ordinary repository policy. Enabling revalidates the current candidate; it never resumes stale authority.
+RDD is on by default and opt-out. With no configured preference, status reports `effective: on, source: default` without saving a user decision. Explicit global or clone-local OFF wins; use `gentle-ai review mode disable` to opt out. A global OFF never depends on reading the clone-local override: `review mode status` reports `off (decided by global)` and the stop hook stays silent even when the Git common directory cannot hold review authority, such as an SMB/UNC share on Windows. With reviews on, that directory is refused with a typed unsupported-filesystem error whose continuation is `gentle-ai review mode disable --scope global` or moving the repository to a local NTFS or ReFS volume. Automation must not toggle the mode or persist a preference on the user's behalf. Candidate consent is separate, and delivery always follows ordinary repository policy. Enabling revalidates the current candidate; it never resumes stale authority.
 
 ## Quick path
 
