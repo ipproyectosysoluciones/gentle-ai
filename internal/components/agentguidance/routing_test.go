@@ -368,7 +368,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			guard := strings.Index(rendered, "First establish whether the requested outcome explicitly authorizes a change.")
+			guard := strings.Index(rendered, piStep(agent.ID, "First establish whether the requested outcome explicitly authorizes a change."))
 			organic := strings.Index(rendered, "### Organic Driven Development")
 			if guard < 0 || organic <= guard {
 				t.Fatal("ODD must follow the mutation-authorization guard")
@@ -502,7 +502,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			for _, tt := range applicable {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, clause := range tt.clauses {
-						clause = strings.ReplaceAll(clause, "<runtime>", string(agent.ID))
+						clause = piStep(agent.ID, strings.ReplaceAll(clause, "<runtime>", string(agent.ID)))
 						if !strings.Contains(rendered, clause) {
 							t.Errorf("missing work-unit commit instruction %q", clause)
 						}
@@ -525,7 +525,7 @@ func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
 			}
 
-			guard := "First establish whether the requested outcome explicitly authorizes a change."
+			guard := piStep(agent.ID, "First establish whether the requested outcome explicitly authorizes a change.")
 			guardOffset := strings.Index(rendered, guard)
 			topologyOffset := strings.Index(rendered, "**Direct inline:**")
 			if guardOffset < 0 || topologyOffset < 0 || guardOffset > topologyOffset {
@@ -539,7 +539,7 @@ func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 				"After explicit change intent is established",
 				"Every authorized change takes exactly one implementation route: direct inline or delegated direct.",
 			} {
-				if !strings.Contains(rendered, want) {
+				if want = piStep(agent.ID, want); !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing outcome-authorization clause %q:\n%s", agent.ID, want, rendered)
 				}
 			}
@@ -652,8 +652,10 @@ func TestRenderRoutingIsSemanticallyEqualAcrossAgents(t *testing.T) {
 
 	// Routing is semantically equal across every runtime that shares an RDD
 	// capability: RDD runtimes carry the review clauses, the rest do not.
-	referenceAgent := map[bool]model.AgentID{}
-	references := map[bool][]string{}
+	// Pi renders Gentle Shell's own ODD steps, so it forms its own group.
+	type routingGroup struct{ rdd, pi bool }
+	referenceAgent := map[routingGroup]model.AgentID{}
+	references := map[routingGroup][]string{}
 
 	for _, agent := range catalog.AllAgents() {
 		rendered, err := RenderRouting(agent.ID)
@@ -669,7 +671,7 @@ func TestRenderRoutingIsSemanticallyEqualAcrossAgents(t *testing.T) {
 			t.Fatalf("RenderRouting(%q) carries no routing semantics", agent.ID)
 		}
 
-		group := model.SupportsReceiptDrivenDevelopment(agent.ID)
+		group := routingGroup{rdd: model.SupportsReceiptDrivenDevelopment(agent.ID), pi: agent.ID == model.AgentPi}
 		reference := references[group]
 		if reference == nil {
 			referenceAgent[group] = agent.ID
@@ -738,6 +740,7 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 			}
 			previous := -1
 			for _, want := range orderedSubstrings {
+				want = piStep(agent.ID, want)
 				at := strings.Index(rendered, want)
 				if at < 0 {
 					t.Fatalf("RenderRouting(%q) is missing %q:\n%s", agent.ID, want, rendered)
@@ -755,7 +758,7 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 				"Never describe this workflow only when asked about it: run it.",
 				"Resume an interrupted feature with `mem_context`",
 			} {
-				if !strings.Contains(rendered, want) {
+				if want = piStep(agent.ID, want); !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing ODD default-workflow clause %q:\n%s", agent.ID, want, rendered)
 				}
 			}
@@ -1037,7 +1040,7 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			}
 			for _, spec := range specs {
 				for _, want := range spec.required {
-					if !strings.Contains(rendered, want) {
+					if want = piStep(agent.ID, want); !strings.Contains(rendered, want) {
 						t.Errorf("%s: RenderRouting(%q) is missing %q", spec.name, agent.ID, want)
 					}
 				}
@@ -1076,4 +1079,64 @@ func TestRenderRoutingKeepsSmallTasksInlineAndDifferentialChecksInScratch(t *tes
 			t.Errorf("%s routing still suggests git stash or a HEAD copy for the differential check", agent.ID)
 		}
 	}
+}
+
+// Pi's ODD steps carry Gentle Shell's own clauses (the visible `todo`
+// projection, routing through the orchestrator's Mechanisms, phase reporting,
+// and its asset pointers). gentle-ai renders them so Gentle Shell consumes one
+// source instead of adapting the canon by hand; no other runtime receives them.
+func TestRenderRoutingGivesPiItsOwnODDSteps(t *testing.T) {
+	t.Parallel()
+
+	piClauses := []string{
+		"then create or rebuild the visible `todo` list from the reconciled feature tasks",
+		"Route each task through the orchestrator's Mechanisms",
+		"update the file, mirror, and visible `todo` projection after every task transition and material plan change",
+		"Never end with a tracked task pending unless you quote the user's explicit stop.",
+		"native review runs only under the user-owned RDD switch.",
+		"Phase reporting: the Gentle Shell prompt label is inferred automatically",
+		"Detail for steps 3–7: `orchestrator-delegation.md` and `orchestrator-memory.md`.",
+	}
+	// The hedged-wording rule lives in Pi's step 1 and in the canonical step 7;
+	// each runtime must carry it exactly once.
+	const hedged = "they may stop you or resume later asks for notes and separate commits"
+
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, clause := range piClauses {
+			if got, want := strings.Contains(rendered, clause), agent.ID == model.AgentPi; got != want {
+				t.Errorf("%s routing contains %q = %t, want %t", agent.ID, clause, got, want)
+			}
+		}
+		if count := strings.Count(rendered, hedged); count != 1 {
+			t.Errorf("%s routing carries the hedged-wording rule %d times, want 1", agent.ID, count)
+		}
+	}
+}
+
+// piStepWording maps a canonical ODD step clause to the wording of the same
+// rule in Pi's own steps (piODDSteps), so the clause tests above hold every
+// runtime to the rule while Pi keeps Gentle Shell's phrasing.
+var piStepWording = map[string]string{
+	"1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change.":                      "1. **Authorize.** Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"First establish whether the requested outcome explicitly authorizes a change.":                                        "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"Investigation, explanation, review, audit, comparison, and solution-proposal or planning-only requests are read-only": "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts":                    "no writer, apply, or implementation artifacts",
+	"If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.":             "Ambiguous or conditional change intent (unclear whether a change is authorized at all) gets one clarification; stop and wait.",
+	"Size the task by the Task Size section below":                                                                         "Size the task by the orchestrator's Task Size section",
+	"push, pull request creation, and merge remain the user's decisions under ordinary repository policy":                  "push, pull request creation, and merge remain the user's decisions.",
+	"Hedged wording is not a stop": "that result is a valid stop, hedged wording is not",
+	"A tracked task ends pending only with the user's explicit stop or one **Needs your decision** result naming the open blockers or missing proof":                           "Never end with a tracked task pending unless you quote the user's explicit stop. An applicable quick check runs once; an unavailable verifier or subagent is reported as unavailable, never retried or escalated into extra ceremony. Partial, blocked, unavailable, or exhausted proof becomes one **Needs your decision** result naming the open blockers or missing proof",
+	"Explore only for a map you need to decide or route, never to read files you will read anyway before writing inline":                                                       "Do not delegate exploration of files you will read anyway to work inline; explore only for a map you need to decide or route.",
+	"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface": "Each test asserts every observable effect of the rule it covers (exit code, exact stdout and stderr, and that rejected input leaves stored data and counters unchanged), covers the cases the rule itself names (its examples, boundaries, and errors), and checks through the public interface, never internal storage.",
+}
+
+func piStep(agent model.AgentID, clause string) string {
+	if pi, ok := piStepWording[clause]; ok && agent == model.AgentPi {
+		return pi
+	}
+	return clause
 }
