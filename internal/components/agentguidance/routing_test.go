@@ -31,6 +31,29 @@ func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
 	}
 }
 
+// C7: blind reviewers flagged test scratch and tool caches in delivered diffs,
+// so the shared test-first policy keeps scratch outside the worktree and
+// forwards that rule to workers with the rest of the test discipline.
+func TestRenderRoutingKeepsTestScratchOutOfTheWorktree(t *testing.T) {
+	t.Parallel()
+
+	const rule = "Keep test scratch state (temporary directories, `HOME`, `TMPDIR`, tool caches) outside the worktree in a `mktemp -d` directory; when it must live inside the worktree, use a path git excludes and remove it before finishing, so no tool cache or scratch path remains in the change. Subagents never delete scratch: they report its exact paths, and the parent removes outside scratch after use, including the paths a worker or verifier reports. Forward the applicable runner, this test discipline"
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(rendered, rule) {
+			t.Errorf("%s routing is missing the test scratch rule", agent.ID)
+		}
+		for _, retired := range []string{".test-tmp", "TMPDIR=$PWD"} {
+			if strings.Contains(rendered, retired) {
+				t.Errorf("%s routing still points scratch into the worktree: %q", agent.ID, retired)
+			}
+		}
+	}
+}
+
 // supportedAgentCount guards the catalog itself: routing renders for every
 // supported adapter (including the catalog-only Conductor, which simply never
 // gets written), so a silently shrinking catalog must fail here instead of
@@ -407,7 +430,9 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		}},
 	}
 	// Runtimes without receipt-driven development verify each work unit by
-	// risk instead of assessing it for native review.
+	// risk instead of assessing it for native review. pain-point-iteration S9
+	// C1 changed the verifier clauses: only a named high-risk item adds the
+	// independent verifier, and an unclear change no longer counts as high.
 	oddTests := []struct {
 		name    string
 		clauses []string
@@ -415,9 +440,9 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		{"verify each work unit by risk", []string{
 			"Verification covers a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch.",
 			"Verify each work-unit commit in proportion to its risk",
-			"an added independent verifier for high-risk changes by the Task Size list",
+			"an added independent verifier only when a named Task Size high-risk item applies",
 			"Record per task the risk tier you applied and the checks you observed",
-			"count an unclear change as high only when a bounded look cannot tell whether the list applies",
+			"an unclear change never adds a verifier by itself",
 		}},
 	}
 
@@ -725,8 +750,10 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 			}
 
 			for _, want := range []string{
-				"### Mandatory Delegation Triggers",
-				"These triggers are mandatory, not advisory",
+				// pain-point-iteration S9 C4: a trigger is mandatory only once its
+				// condition truly holds; none holds by default, inline when in doubt.
+				"### Delegation Triggers",
+				"Each trigger holds only when its condition truly holds, and only then is it mandatory, not advisory; no trigger holds by default, and when in doubt work inline.",
 				"stop and delegate through the runtime's subagent mechanism",
 				"executing past a fired trigger inline is a routing defect",
 				"**Mapping trigger:** when understanding exceeds the inline batch budget",
@@ -739,7 +766,7 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 				"record the chosen route per task",
 				"so skipped delegation is observable instead of silent",
 				"These triggers only choose between direct inline and delegated direct inside the organic flow",
-				"honoring its mandatory delegation triggers",
+				"honoring its delegation triggers when their conditions truly hold",
 			} {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing mandatory delegation clause %q:\n%s", agent.ID, want, rendered)
@@ -864,11 +891,17 @@ func TestRenderRoutingSizesTasksByUnderstandingRiskAndResumability(t *testing.T)
 				for _, want := range []string{
 					"--escalate-item <1-6> --escalate-reason",
 					"never lower it",
+					// pain-point-iteration S9 C1: the native tier decides native
+					// review only; it no longer "wins" for the independent verifier.
+					"When RDD is on, the native assess tier decides native review and you may only raise it; it never adds an independent verifier by itself, only a named high-risk item does.",
 				} {
 					if !strings.Contains(rendered, want) {
 						t.Fatalf("RenderRouting(%q) is missing agent escalation clause %q", agent.ID, want)
 					}
 				}
+			}
+			if strings.Contains(rendered, "that tier wins") {
+				t.Fatalf("RenderRouting(%q) keeps the retired native-tier-wins clause", agent.ID)
 			}
 		})
 	}
@@ -888,7 +921,10 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 	}{
 		{"S1 writer by reason", []string{
 			"**Writer trigger:** a writer is delegated only for a named reason",
-			"(a) parallelism: two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent, launched together",
+			// pain-point-iteration S9 C4: a unit is an independent behavior with
+			// several minutes of work, never a test/doc/code split of one behavior.
+			"(a) parallelism: two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work (several files or roughly 100+ changed lines; a subagent spends one to two minutes reading before it writes), launched together",
+			"A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another.",
 			"(b) context: the long-session backstop below",
 			"Never delegate a writer for size, a large task alone, file count, or a price ratio",
 			"Without a reason, the parent works inline, following its logbook",
@@ -896,6 +932,7 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 		}, []string{
 			"a large task delegates one writer per task",
 			"a large task delegates one bounded writer per task",
+			"each clearly heavier than starting a subagent",
 		}},
 		{"S2 parallel writers", []string{
 			"**Parallel writers:** work in another repository goes in a fresh worktree based on that repository's main",
@@ -934,12 +971,21 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			"For every existing command or option the change touches, add one test proving its previous behavior still holds",
 			"add no other cases",
 			"An existing behavior counts as touched when it shares the code you changed (options, parsers, helpers, validation)",
+			// pain-point-iteration S9 C8: the differential check compares old
+			// and new output of the commands that share the changed code.
+			"Before finishing, run a differential check: for each existing command that shares the code you changed, run it with the new or changed input (for example a new option passed to a sibling subcommand) against the previous code (`git stash` or a copy of HEAD) and against your change, and compare stdout, stderr, and exit code; any difference nobody asked for is a regression to fix and pin with a test.",
 			"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface",
 			"When you add or change a command, option, or message, update the help text and docs",
 		}, []string{
 			"configured TDD mode",
 			"strict TDD is active",
 		}},
+		// pain-point-iteration S9 C3: parallel writers cannot see each other,
+		// so each writer prompt names the helpers that keep shared invariants.
+		{"S9 shared-state invariants", []string{
+			"**Invariants:** each writer prompt names the existing helpers its unit must reuse for shared state (for example the function that adds an entry other commands also add) and the invariants they keep (ordering, uniqueness, validation, normalization)",
+			"Whoever writes, inline or delegated, reuses the existing function for shared state and never re-implements that step with a different shape.",
+		}, nil},
 	}
 
 	for _, agent := range catalog.AllAgents() {
