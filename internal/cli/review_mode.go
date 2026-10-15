@@ -96,12 +96,21 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	}
 	// #4670: a status that could not be resolved carries the fail-closed
 	// projection, not a decision, so the human surface must not render it as
-	// one.
-	unavailable := operation == "status" && err != nil
+	// one. #5533: a failed enable or disable carries the same projection.
+	unavailable := err != nil && !reviewModeRefusalCarriesResolvedStatus(err)
 	if emitErr := emitReviewMode(stdout, result, *emitJSON, unavailable); emitErr != nil && err == nil {
 		return emitErr
 	}
 	return err
+}
+
+// reviewModeRefusalCarriesResolvedStatus reports the one refusal returned
+// beside a status that was actually resolved: clearing a clone override while
+// the global switch is off. Every other failure returns the fail-closed
+// projection, which names no decision a stored record made.
+func reviewModeRefusalCarriesResolvedStatus(err error) bool {
+	var disabled *reviewtransaction.RDDDisabledError
+	return errors.As(err, &disabled)
 }
 
 // reviewModeStatus is strictly read-only: it never creates user state and never

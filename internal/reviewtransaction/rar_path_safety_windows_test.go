@@ -436,7 +436,7 @@ func TestRARWindowsAuthorityFilesystemClassifier(t *testing.T) {
 // typed unsupported-filesystem refusal, still inside the unsafe-path family,
 // and its message names a continuation instead of "check the path and rerun".
 func TestRARWindowsUNCCommonDirIsATypedUnsupportedFilesystem(t *testing.T) {
-	for _, path := range []string{`\\server\share\repo\.git`, `\\?\UNC\server\share\repo\.git`} {
+	for _, path := range []string{`\\server\share\repo\.git`, `\\?\UNC\server\share\repo\.git`, `\\.\UNC\server\share\repo\.git`} {
 		t.Run(path, func(t *testing.T) {
 			err := validateRARRepositoryParent(path)
 
@@ -453,6 +453,36 @@ func TestRARWindowsUNCCommonDirIsATypedUnsupportedFilesystem(t *testing.T) {
 			if strings.Contains(err.Error(), "check the path and rerun") ||
 				!strings.Contains(err.Error(), "gentle-ai review mode disable --scope global") {
 				t.Fatalf("message %q does not name the documented continuation", err.Error())
+			}
+		})
+	}
+}
+
+// #5533: a local long-path or device-namespace common directory is refused
+// exactly as before -- the same typed, fail-closed refusal -- but it is on this
+// machine, so the refusal must not describe an SMB/UNC share.
+func TestRARWindowsLocalLongPathCommonDirIsRefusedButNotRemote(t *testing.T) {
+	for _, path := range []string{`\\?\C:\repo\.git`, `\\.\C:\repo\.git`} {
+		t.Run(path, func(t *testing.T) {
+			for name, err := range map[string]error{
+				"validate": validateRARRepositoryParent(path),
+				"format":   formatWindowsRARAuthorityRefusal(path),
+			} {
+				var unsupported *UnsupportedAuthorityFilesystemError
+				if !errors.As(err, &unsupported) {
+					t.Fatalf("%s: err = %v, want *UnsupportedAuthorityFilesystemError", name, err)
+				}
+				if unsupported.Path != path || unsupported.Remote {
+					t.Fatalf("%s: typed refusal = %#v, want local %q", name, unsupported, path)
+				}
+				if !errors.Is(err, errUnsafeRARAuthorityPath) || !errors.Is(err, errUnknownWindowsFilesystem) {
+					t.Fatalf("%s: err = %v, want the unsafe-path and unknown-filesystem sentinels", name, err)
+				}
+				for _, message := range []string{err.Error(), unsupported.Error()} {
+					if strings.Contains(message, "remote") || strings.Contains(message, "SMB") {
+						t.Fatalf("%s: local refusal %q describes a remote share", name, message)
+					}
+				}
 			}
 		})
 	}

@@ -1108,6 +1108,40 @@ func TestReviewModeStatusReportsAFailedResolutionAsUnavailable(t *testing.T) {
 	}
 }
 
+// #5533: a mutation that cannot resolve the clone's mode carries the same
+// fail-closed projection status does, so it must be reported the same way
+// rather than as an "off (decided by clone_local)" beside "clone-local: unset".
+// The JSON result keeps the projection unchanged.
+func TestReviewModeFailedMutationReportsTheModeAsUnavailable(t *testing.T) {
+	for _, operation := range []string{"enable", "disable"} {
+		t.Run(operation, func(t *testing.T) {
+			reviewModeHome(t)
+			repo := initReviewCLIRepo(t)
+			unvalidatableReviewModeSwitchRoot(t, repo)
+
+			var output bytes.Buffer
+			if err := RunReviewMode([]string{operation, "--scope", "clone", "--cwd", repo}, &output); err == nil {
+				t.Fatalf("%s resolved an unvalidatable override without an error:\n%s", operation, output.String())
+			}
+			if got := output.String(); got != "receipt-driven development: unavailable (the review mode could not be resolved)\n" {
+				t.Fatalf("failed %s output = %q, want only the unavailable line", operation, got)
+			}
+
+			output.Reset()
+			if err := RunReviewMode([]string{operation, "--scope", "clone", "--cwd", repo, "--json"}, &output); err == nil {
+				t.Fatalf("%s --json resolved an unvalidatable override without an error", operation)
+			}
+			var result ReviewModeResult
+			if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+				t.Fatalf("failed %s --json output is not a result: %v\n%s", operation, err, output.String())
+			}
+			if result.Status.Effective != reviewtransaction.RDDModeOff {
+				t.Fatalf("failed %s --json status = %#v, want the unchanged fail-closed off projection", operation, result.Status)
+			}
+		})
+	}
+}
+
 // #4670 S3: an authority filesystem that cannot keep review state private is
 // a typed refusal whose continuation the operator can actually run.
 func TestReviewModeUnsupportedAuthorityFilesystemNamesItsContinuation(t *testing.T) {
