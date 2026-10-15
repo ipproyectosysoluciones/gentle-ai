@@ -97,20 +97,33 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	// #4670: a status that could not be resolved carries the fail-closed
 	// projection, not a decision, so the human surface must not render it as
 	// one. #5533: a failed enable or disable carries the same projection.
-	unavailable := err != nil && !reviewModeRefusalCarriesResolvedStatus(err)
+	unavailable := err != nil && !reviewModeStatusResolved(result.Status)
 	if emitErr := emitReviewMode(stdout, result, *emitJSON, unavailable); emitErr != nil && err == nil {
 		return emitErr
 	}
 	return err
 }
 
-// reviewModeRefusalCarriesResolvedStatus reports the one refusal returned
-// beside a status that was actually resolved: clearing a clone override while
-// the global switch is off. Every other failure returns the fail-closed
-// projection, which names no decision a stored record made.
-func reviewModeRefusalCarriesResolvedStatus(err error) bool {
-	var disabled *reviewtransaction.RDDDisabledError
-	return errors.As(err, &disabled)
+// reviewModeStatusResolved reports whether status is a resolution rather than
+// the fail-closed projection. It is read from the state, never the error: a
+// refusal such as clearing a clone override under a global off, or a write
+// that applied only for this build, still returns what was resolved. A
+// resolved status names a source that holds the value it reports; the
+// fail-closed projection names a source while both sources stay unset, or no
+// source at all.
+func reviewModeStatusResolved(status reviewtransaction.RDDModeStatus) bool {
+	switch status.Source {
+	case reviewtransaction.RDDModeSourceDefault:
+		return status.Global == reviewtransaction.RDDModeUnset &&
+			status.CloneLocal == reviewtransaction.RDDModeUnset &&
+			status.Effective == reviewtransaction.RDDModeOn
+	case reviewtransaction.RDDModeSourceGlobal:
+		return status.Global != reviewtransaction.RDDModeUnset
+	case reviewtransaction.RDDModeSourceCloneLocal:
+		return status.CloneLocal != reviewtransaction.RDDModeUnset
+	default:
+		return false
+	}
 }
 
 // reviewModeStatus is strictly read-only: it never creates user state and never
