@@ -54,6 +54,36 @@ func TestRenderRoutingKeepsTestScratchOutOfTheWorktree(t *testing.T) {
 	}
 }
 
+// pain-point-iteration S14: commit per reviewable slice, not per task. A
+// per-task commit rule made models commit every small task (branch plus seven
+// commits on a six-task feature); about 400-line slices keep the native review
+// candidate inside the reviewer context, and a high-risk unit still gets its
+// own commit so review can take it alone. RDD runtimes carry the canon byte
+// for byte; runtimes without RDD name verification instead of native review,
+// as step 7 already does.
+func TestRenderRoutingCommitsWorkUnitsInReviewableSlices(t *testing.T) {
+	t.Parallel()
+
+	const rule = "Commit work units in reviewable slices of about 400 authored changed lines on the feature branch (branch first when on the default branch), with tests and docs alongside the behavior and a Conventional Commit message; a unit whose Risk line names a high-risk item gets its own commit so native review can take it alone, and the last slice closes the feature. Record the commit that holds each task in the feature document as evidence."
+	oddRule := strings.Replace(rule, "so native review can take it alone", "so verification can take it alone", 1)
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := oddRule
+		if model.SupportsReceiptDrivenDevelopment(agent.ID) {
+			want = rule
+		}
+		if !strings.Contains(rendered, want) {
+			t.Errorf("%s routing is missing the reviewable-slice commit rule", agent.ID)
+		}
+		if strings.Contains(rendered, "Every tracked task closes with at least one work-unit commit") {
+			t.Errorf("%s routing still commits per task", agent.ID)
+		}
+	}
+}
+
 // supportedAgentCount guards the catalog itself: routing renders for every
 // supported adapter (including the catalog-only Conductor, which simply never
 // gets written), so a silently shrinking catalog must fail here instead of
@@ -362,8 +392,8 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 }
 
 // TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt pins the
-// work-unit commit contract: every task closes with a commit on the feature
-// branch, and the native review candidate is that commit or the PR slice it
+// work-unit commit contract: work units are committed in reviewable slices on
+// the feature branch, and the native review candidate is that commit or the PR slice it
 // belongs to, bounded to the previous reviewed boundary, rather than a TODO
 // checkbox or the accumulated branch. It also pins the per-tier assessment
 // contract (passive/low stays silent, high or an unavailable assessment
@@ -378,12 +408,14 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		name    string
 		clauses []string
 	}{
-		{"work-unit commit closes each task", []string{
-			"closes with at least one work-unit commit on the feature branch",
+		// S14: commit per reviewable slice, not per task.
+		{"work units are committed in reviewable slices", []string{
+			"Commit work units in reviewable slices of about 400 authored changed lines on the feature branch",
 			"branch first when on the default branch",
 			"tests and docs alongside the behavior",
-			"using a Conventional Commit message",
-			"record the commit identity in the feature document as evidence",
+			"a Conventional Commit message",
+			"a unit whose Risk line names a high-risk item gets its own commit so",
+			"Record the commit that holds each task in the feature document as evidence",
 			"Work-unit commits on the feature branch are part of authorized large ODD implementation",
 			"push, pull request creation, and merge remain the user's decisions under ordinary repository policy",
 		}},
@@ -422,9 +454,16 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"`under_budget` stays pending in the slice until a later commit reaches the budget",
 			"`already_reviewed` means this exact range is already covered by terminal authority",
 		}},
-		{"boundaries advance and outcomes are recorded per task", []string{
+		// S14: commit per reviewable slice; a high-risk commit is reviewed
+		// alone only after the open medium slice before it is closed.
+		{"a high-risk unit closes the open slice first", []string{
+			"When a high-risk unit follows pending `under_budget` commits, close the open slice first, assessing and reviewing it as the slice, so the high-risk commit is then reviewed alone against the new boundary",
+		}},
+		// S14: commit per reviewable slice; a commit may hold several tasks,
+		// so the assessment outcome is recorded per commit.
+		{"boundaries advance and outcomes are recorded per commit", []string{
 			"The first boundary is the branch point, and every reviewed boundary becomes the next base",
-			"Record per task the assessed tier and outcome: granted, declined, passive, under budget, already reviewed, or unavailable",
+			"Record per commit the assessed tier and outcome: granted, declined, passive, under budget, already reviewed, or unavailable",
 			"An unavailable or failed assessment never lowers the tier: treat the commit as due and run the preflight STATUS with `--base-ref <last reviewed boundary> --committed-only`",
 			"Never infer low risk from a failed assessment",
 		}},
@@ -973,7 +1012,7 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			"An existing behavior counts as touched when it shares the code you changed (options, parsers, helpers, validation)",
 			// pain-point-iteration S9 C8: the differential check compares old
 			// and new output of the commands that share the changed code.
-			"Before finishing, run a differential check: for each existing command that shares the code you changed, run it with the new or changed input (for example a new option passed to a sibling subcommand) against the previous code (`git stash` or a copy of HEAD) and against your change, and compare stdout, stderr, and exit code; any difference nobody asked for is a regression to fix and pin with a test.",
+			"Before finishing, run a differential check: for each existing command that shares the code you changed, run it with the new or changed input (for example a new option passed to a sibling subcommand) against the previous code (a copy of the base commit in a `mktemp -d` scratch directory, never committed as a test; committed tests never read git history or a fixed commit) and against your change, and compare stdout, stderr, and exit code; any difference nobody asked for is a regression to fix and pin with a test.",
 			"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface",
 			"When you add or change a command, option, or message, update the help text and docs",
 		}, []string{
@@ -1009,5 +1048,32 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// S15 (pain-point iteration): a bench run read two wishes in one message as separate deliverables and started
+// two writers for ~100-line units (USD 0.55 vs 0.20 inline); blind review found delivered tests pinning a fixed git
+// commit from the differential check. Every runtime gets the three corrections.
+func TestRenderRoutingKeepsSmallTasksInlineAndDifferentialChecksInScratch(t *testing.T) {
+	t.Parallel()
+
+	rules := []string{
+		"separate deliverables the user wants apart (never several features asked at once)",
+		"Units of about 100 changed lines or less always run inline: writing them costs less than starting workers.",
+		"a copy of the base commit in a `mktemp -d` scratch directory, never committed as a test; committed tests never read git history or a fixed commit",
+	}
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range rules {
+			if !strings.Contains(rendered, rule) {
+				t.Errorf("%s routing is missing %q", agent.ID, rule)
+			}
+		}
+		if strings.Contains(rendered, "(`git stash` or a copy of HEAD)") {
+			t.Errorf("%s routing still suggests git stash or a HEAD copy for the differential check", agent.ID)
+		}
 	}
 }
