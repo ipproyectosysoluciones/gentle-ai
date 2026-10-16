@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/storage"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
 
 type CheckStatus = doctor.Status
@@ -524,7 +525,7 @@ func agentConfigDir(homeDir, agentID string) string {
 	case "vscode":
 		return filepath.Join(cfgBase, "Code")
 	case "codex":
-		return filepath.Join(homeDir, ".codex")
+		return system.CodexConfigDir(homeDir)
 	case "kiro":
 		return filepath.Join(homeDir, ".kiro")
 	default:

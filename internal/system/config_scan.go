@@ -83,6 +83,9 @@ func vscodeCopilotGlobalConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".copilot")
 }
 
+func CodexConfigDir(homeDir string) string {
+	return filepath.Join(homeDir, ".codex")
+}
 // ScanConfigs returns the presence state of every known managed agent's global
 // This is a compatibility shim: it preserves the ConfigState contract for TUI
 // and validation callers while the canonical discovery (agents.DiscoverInstalled)
