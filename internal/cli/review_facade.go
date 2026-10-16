@@ -828,6 +828,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 	}
 	committedOnlyProvided := reviewFlagWasProvided(flags, "committed-only")
+	var timingInfo *reviewtransaction.TargetStatusTiming
+	if *timing {
+		timingInfo = &reviewtransaction.TargetStatusTiming{}
+	}
 	if *contract != "" {
 		if err := validateReviewIntegrationContract(*contract); err != nil {
 			return err
@@ -1075,14 +1079,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// A free exact selector starts independently. Freeze its target without
 			// consulting sibling authority; START then creates or replays only this
 			// explicitly rendered lineage.
-			liveSnapshot, err = builder.BuildStoredSnapshot(ctx, target)
+			liveSnapshot, err = builder.BuildStoredSnapshotWithTiming(ctx, target, timingInfo)
 			if err != nil {
 				return fmt.Errorf("freeze negotiated fresh review target: %w", err)
 			}
 			// Resolve the effective candidate before acknowledgement discovery or
 			// consumption lookup, so STATUS and START share one identity.
 			if requestedLineage == "" && selectedBaseRef == "" && !*workspaceOverlay {
-				if derived, derivedTarget, ok := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target); ok {
+				if derived, derivedTarget, ok := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target, timingInfo); ok {
 					liveSnapshot, target = derived, derivedTarget
 					derivedBaseRef = derivedTarget.BaseRef
 					selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
@@ -1109,7 +1113,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					return fmt.Errorf("assess negotiated review target: %w", err)
 				}
 			} else {
-				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
+				native = reviewFreshAtomicTargetStatus(target, liveSnapshot, timingInfo)
 				// A lineage already holding this exact START is live authority.
 				startOccupied := false
 				if requestedLineage == "" {
@@ -1343,9 +1347,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							if validationRequest != nil {
 								contextTarget = validationRequest.CorrectionTargetIdentity
 							}
-							repositoryContext, _ = reviewtransaction.DeriveReviewRepositoryContextHandle(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
+							var contextErr error
+							repositoryContext, contextErr = reviewtransaction.DeriveReviewRepositoryContextHandle(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
 								LineageID: record.State.LineageID, TargetIdentity: contextTarget, Revision: record.State.CapturePhaseRevision,
 							})
+							if contextErr != nil {
+								return fmt.Errorf("derive repository context for correction plan: %w", contextErr)
+							}
 							if repositoryContext != "" {
 								result.RepositoryContext = &ReviewRepositoryContextReference{
 									Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContext,
@@ -1581,7 +1589,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 // reviewFreshAtomicTargetStatus projects a frozen target into the only status
 // decision a selector-free fresh compact START needs. It deliberately has no
 // authority view: CreateOrReplayAtomicStart owns the exact-lineage decision.
-func reviewFreshAtomicTargetStatus(target reviewtransaction.Target, snapshot reviewtransaction.Snapshot) reviewtransaction.TargetStatusResult {
+func reviewFreshAtomicTargetStatus(target reviewtransaction.Target, snapshot reviewtransaction.Snapshot, timing *reviewtransaction.TargetStatusTiming) reviewtransaction.TargetStatusResult {
 	action, replayability := reviewFreshStatusPreflight(snapshot)
 	projection := reviewtransaction.TargetProjectionStatus{
 		Kind: snapshot.Kind, Projection: facadeProjection(snapshot.Projection), BaseTree: snapshot.BaseTree,
@@ -1606,11 +1614,11 @@ func reviewFreshAtomicTargetStatus(target reviewtransaction.Target, snapshot rev
 // to the remote default branch's unique committed range before classification.
 // The result is the effective STATUS candidate, not a second transition-only
 // identity. Ambiguous or empty ranges retain the existing base-selection fallback.
-func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, bool) {
+func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target, timing *reviewtransaction.TargetStatusTiming) (reviewtransaction.Snapshot, reviewtransaction.Target, bool) {
 	if live.Kind != reviewtransaction.TargetCurrentChanges || len(live.Paths) != 0 {
 		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
 	}
-	base, err := reviewtransaction.ResolveCommittedRangeBase(ctx, root, nil)
+	base, err := reviewtransaction.ResolveCommittedRangeBase(ctx, root, timing)
 	if err != nil || base == "" {
 		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
 	}
@@ -1618,7 +1626,7 @@ func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, build
 		Kind: reviewtransaction.TargetBaseDiff, BaseRef: base,
 		IntendedUntracked: append([]string{}, target.IntendedUntracked...),
 	}
-	snapshot, err := builder.BuildStoredSnapshot(ctx, derivedTarget)
+	snapshot, err := builder.BuildStoredSnapshotWithTiming(ctx, derivedTarget, timing)
 	// Empty commits and ambiguous ranges retain the base-selection fallback.
 	return snapshot, derivedTarget, err == nil && len(snapshot.Paths) > 0
 }

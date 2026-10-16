@@ -69,7 +69,9 @@ type TargetProjectionStatus struct {
 
 // TargetStatusTiming captures opt-in phase timing diagnostics for the
 // native STATUS operation. Each field is the wall-clock duration in
-// nanoseconds for the corresponding phase.
+// nanoseconds for the corresponding phase. A field with value zero is
+// omitted from JSON (due to `omitempty`), so an omitted field may indicate
+// either that the phase was not executed or that it took zero nanoseconds.
 type TargetStatusTiming struct {
 	SnapshotConstruction     int64 `json:"snapshot_construction_ns,omitempty"`
 	BaseRangeDerivation      int64 `json:"base_range_derivation_ns,omitempty"`

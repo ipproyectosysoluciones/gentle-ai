@@ -25,11 +25,7 @@ func PrepareReviewRepositoryRootWithTiming(ctx context.Context, workspace string
 	builder := SnapshotBuilder{Repo: workspace}
 	var resolveErr error
 	var root string
-	if timing != nil {
-		root, resolveErr = builder.ResolveRepositoryRootWithTiming(ctx, timing)
-	} else {
-		root, resolveErr = builder.ResolveRepositoryRoot(ctx)
-	}
+	root, resolveErr = builder.ResolveRepositoryRootWithTiming(ctx, timing)
 	if resolveErr == nil {
 		return root, nil
 	}
@@ -56,10 +52,7 @@ func PrepareReviewRepositoryRootWithTiming(ctx context.Context, workspace string
 	if _, initErr := runGitIsolated(ctx, workspace, nil, nil, "init", "--quiet"); initErr != nil {
 		return "", initErr
 	}
-	if timing != nil {
-		return builder.ResolveRepositoryRootWithTiming(ctx, timing)
-	}
-	return builder.ResolveRepositoryRoot(ctx)
+	return builder.ResolveRepositoryRootWithTiming(ctx, timing)
 }
 
 // ReviewRootResolutionReportsNoRepository reports the bounded Git discovery

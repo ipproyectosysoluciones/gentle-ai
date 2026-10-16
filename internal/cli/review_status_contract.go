@@ -245,9 +245,7 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 			InitialSnapshotIdentity: native.Projection.InitialSnapshotIdentity, CurrentSnapshotIdentity: native.Projection.CurrentSnapshotIdentity,
 		},
 	}
-	if native.TimingDiagnostics != nil {
-		result.TimingDiagnostics = native.TimingDiagnostics
-	}
+	result.TimingDiagnostics = native.TimingDiagnostics
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity

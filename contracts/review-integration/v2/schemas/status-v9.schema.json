@@ -20,7 +20,18 @@
     "next_transition": {"$ref": "#/$defs/next_transition"}, "validation_request": {"$ref": "status-v8.schema.json#/properties/validation_request"},
     "repository_context": {"$ref": "status-v8.schema.json#/properties/repository_context"}, "disposition": {"$ref": "status-v8.schema.json#/properties/disposition"},
     "eligible_untracked_inventory": {"$ref": "status-v8.schema.json#/properties/eligible_untracked_inventory"},
-    "escalation": {"$ref": "status-v8.schema.json#/properties/escalation"}
+    "escalation": {"$ref": "status-v8.schema.json#/properties/escalation"},
+    "timing_diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "snapshot_construction_ns": {"type": "integer"},
+        "base_range_derivation_ns": {"type": "integer"},
+        "ancestry_resolution_ns": {"type": "integer"},
+        "predecessor_resolution_ns": {"type": "integer"},
+        "repo_identity_resolution_ns": {"type": "integer"}
+      }
+    }
   },
   "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
