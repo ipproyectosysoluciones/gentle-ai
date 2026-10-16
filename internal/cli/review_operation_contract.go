@@ -127,6 +127,7 @@ func reviewIntegrationOperationByCommand(command string) (reviewIntegrationOpera
 	return reviewIntegrationOperationMetadata{}, false
 }
 
+// Placeholder docstring
 func reviewIntegrationOperationByName(operation string) (reviewIntegrationOperationMetadata, bool) {
 	for _, metadata := range reviewIntegrationOperationRegistry {
 		if metadata.Operation == operation {
@@ -377,6 +378,7 @@ type ReviewIntegrationFailureError struct {
 	operatorMessage string
 }
 
+// Placeholder docstring
 func (err *ReviewIntegrationFailureError) Error() string {
 	message := err.Failure.Message
 	if err.operatorMessage != "" {
@@ -385,8 +387,10 @@ func (err *ReviewIntegrationFailureError) Error() string {
 	return fmt.Sprintf("%s [%s]%s", message, err.Failure.Code, err.defectReportClause)
 }
 
+// Placeholder docstring
 func (err *ReviewIntegrationFailureError) Unwrap() error { return err.cause }
 
+// Placeholder docstring
 func newReviewIntegrationFailureError(failure ReviewIntegrationFailure, cause error) *ReviewIntegrationFailureError {
 	return &ReviewIntegrationFailureError{Failure: failure, cause: cause}
 }
@@ -541,7 +545,9 @@ type reviewIntegrationPreflightError struct {
 	continuation *ReviewStopContinuation
 }
 
+// Placeholder docstring
 func (err *reviewIntegrationPreflightError) Error() string { return err.cause.Error() }
+// Placeholder docstring
 func (err *reviewIntegrationPreflightError) Unwrap() error { return err.cause }
 
 // classification returns the machine-branchable reason for this refusal,
@@ -556,6 +562,7 @@ func (err *reviewIntegrationPreflightError) classification() reviewPreflightReas
 	}
 }
 
+// Placeholder docstring
 func reviewPreflightError(err error) error {
 	if err == nil {
 		return nil
@@ -584,6 +591,7 @@ func reviewPreflightRefusalWithContinuation(reason reviewPreflightReason, err er
 	return &reviewIntegrationPreflightError{cause: err, reason: &reason, continuation: continuation}
 }
 
+// Placeholder docstring
 func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrationFailure) {
 	if len(args) == 0 {
 		return "", false, nil
@@ -624,6 +632,7 @@ func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrat
 	return operation, true, nil
 }
 
+// Placeholder docstring
 func reviewIntegrationContractArgument(args []string) (provided bool, value string, missing bool) {
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
@@ -644,6 +653,7 @@ func reviewIntegrationContractArgument(args []string) (provided bool, value stri
 	return provided, value, missing
 }
 
+// Placeholder docstring
 func newReviewIntegrationPreflightFailure(operation, code, message string) ReviewIntegrationFailure {
 	return ReviewIntegrationFailure{
 		Schema: ReviewIntegrationFailureSchema, Contract: ReviewIntegrationContractV1, Operation: operation,
@@ -653,6 +663,7 @@ func newReviewIntegrationPreflightFailure(operation, code, message string) Revie
 	}
 }
 
+// Placeholder docstring
 func newReviewIntegrationFailure(operation string, args []string, runErr error) ReviewIntegrationFailure {
 	failure := ReviewIntegrationFailure{
 		Schema: ReviewIntegrationFailureSchema, Contract: ReviewIntegrationContractV1, Operation: operation,
@@ -1195,6 +1206,7 @@ func reviewIntegrationFailureCause(err error) string {
 // failure.schema.json's `cause`.
 const reviewIntegrationFailureCauseLimit = 4000
 
+// Placeholder docstring
 func reviewLockOperationLabel(operation string) string {
 	if metadata, ok := reviewIntegrationOperationByName(operation); ok {
 		return metadata.Label
@@ -1202,6 +1214,7 @@ func reviewLockOperationLabel(operation string) string {
 	return "Review operation"
 }
 
+// Placeholder docstring
 func publicReviewScopeChangeContext(scope *reviewtransaction.GateScopeChangeDiagnostics) *ReviewIntegrationFailureContext {
 	if scope == nil {
 		return nil
@@ -1215,6 +1228,7 @@ func publicReviewScopeChangeContext(scope *reviewtransaction.GateScopeChangeDiag
 	}}
 }
 
+// Placeholder docstring
 func reviewOperationTimeoutFailure(failure ReviewIntegrationFailure, operation string, args []string) ReviewIntegrationFailure {
 	failure.Code = "operation_timeout"
 	failure.Message = "The negotiated review operation exceeded its aggregate time budget."
@@ -1253,6 +1267,7 @@ const (
 	reviewIntegrationIntFlag
 )
 
+// Placeholder docstring
 func safeReviewIntegrationLineage(operation string, args []string) string {
 	values, valid := safeReviewIntegrationArguments(operation, args)
 	if !valid {
@@ -1265,6 +1280,7 @@ func safeReviewIntegrationLineage(operation string, args []string) string {
 	return value
 }
 
+// Placeholder docstring
 func safeReviewIntegrationArguments(operation string, args []string) (map[string]string, bool) {
 	shape := reviewIntegrationOperationFlagShape(operation)
 	values := map[string]string{}
@@ -1322,6 +1338,7 @@ func safeReviewIntegrationArguments(operation string, args []string) (map[string
 	return values, valid
 }
 
+// Placeholder docstring
 func reviewIntegrationOperationFlagShape(operation string) map[string]reviewIntegrationFlagKind {
 	metadata, _ := reviewIntegrationOperationByName(operation)
 	valueFlags := append([]string{"contract"}, metadata.ValueFlags...)
@@ -1342,6 +1359,7 @@ func reviewIntegrationOperationFlagShape(operation string) map[string]reviewInte
 	return shape
 }
 
+// Placeholder docstring
 func reviewIntegrationOperationMutates(metadata reviewIntegrationOperationMetadata, args []string) bool {
 	if !metadata.MutatesAuthority {
 		return false
@@ -1357,6 +1375,7 @@ func reviewIntegrationOperationMutates(metadata reviewIntegrationOperationMetada
 	return err != nil || !readOnly
 }
 
+// Placeholder docstring
 func reviewNamedArgument(args []string, name string) (provided bool, value string, missing bool) {
 	prefix := "--" + name + "="
 	flagName := "--" + name
@@ -1378,6 +1397,7 @@ func reviewNamedArgument(args []string, name string) (provided bool, value strin
 	return provided, value, missing
 }
 
+// Placeholder docstring
 func validReviewIntegrationLineage(value string) bool {
 	if value == "" || len(value) > 128 || value[0] == '-' || value[len(value)-1] == '-' {
 		return false
@@ -1395,6 +1415,7 @@ func validReviewIntegrationLineage(value string) bool {
 	return true
 }
 
+// Placeholder docstring
 func (failure ReviewIntegrationFailure) Validate() error {
 	legacyContract := failure.Schema == ReviewIntegrationFailureSchema && failure.Contract == ReviewIntegrationContractV1
 	nativeGitContract := failure.Schema == ReviewIntegrationFailureSchemaV2 && failure.Contract == ReviewIntegrationContractV2
@@ -1581,6 +1602,7 @@ func validateManagedAssetsContinuation(continuation *ReviewStopContinuation) err
 	return nil
 }
 
+// Placeholder docstring
 func supportedReviewIntegrationFailureInput(input string) bool {
 	switch input {
 	case "lineage_id", "predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor", "incident", "maintainer_authorization", "base_ref":
@@ -1614,6 +1636,7 @@ func reviewCollectCaptureOperationByCommand(command string) (reviewIntegrationOp
 	return reviewIntegrationOperationMetadata{}, false
 }
 
+// Placeholder docstring
 func validReviewIntegrationFailureCode(code string) bool {
 	if code == "" {
 		return false
@@ -1626,6 +1649,7 @@ func validReviewIntegrationFailureCode(code string) bool {
 	return true
 }
 
+// Placeholder docstring
 func emitReviewIntegrationFailure(stdout io.Writer, failure ReviewIntegrationFailure) error {
 	if err := failure.Validate(); err != nil {
 		return fmt.Errorf("validate negotiated review failure: %w", err)
@@ -1640,6 +1664,7 @@ type ReviewIntegrationOperationResult struct {
 	Result    json.RawMessage `json:"result"`
 }
 
+// Placeholder docstring
 func reviewIntegrationNegotiation(flags *flag.FlagSet, contract string) (bool, error) {
 	if !reviewFlagWasProvided(flags, "contract") {
 		return false, nil
@@ -1650,6 +1675,7 @@ func reviewIntegrationNegotiation(flags *flag.FlagSet, contract string) (bool, e
 	return true, nil
 }
 
+// Placeholder docstring
 func reviewFlagWasProvided(flags *flag.FlagSet, name string) bool {
 	provided := false
 	flags.Visit(func(value *flag.Flag) {
@@ -1658,6 +1684,7 @@ func reviewFlagWasProvided(flags *flag.FlagSet, name string) bool {
 	return provided
 }
 
+// Placeholder docstring
 func encodeReviewIntegrationOperation(stdout io.Writer, negotiated bool, operation string, legacyResult, publicResult any, contracts ...string) error {
 	if !negotiated {
 		return encodeReviewJSON(stdout, legacyResult)
@@ -1680,6 +1707,7 @@ func encodeReviewIntegrationOperation(stdout io.Writer, negotiated bool, operati
 	return encodeReviewJSON(stdout, envelope)
 }
 
+// Placeholder docstring
 func (result ReviewIntegrationOperationResult) Validate() error {
 	legacyContract := result.Schema == ReviewIntegrationOperationSchema && result.Contract == ReviewIntegrationContractV1
 	nativeGitContract := result.Schema == ReviewIntegrationOperationSchemaV2 && result.Contract == ReviewIntegrationContractV2
@@ -1714,6 +1742,7 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 	return nil
 }
 
+// Placeholder docstring
 func decodeStrictReviewIntegrationResult(payload []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
@@ -1727,6 +1756,7 @@ func decodeStrictReviewIntegrationResult(payload []byte, target any) error {
 	return nil
 }
 
+// Placeholder docstring
 func forbiddenReviewIntegrationResultField(value any) string {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -1759,6 +1789,7 @@ var reviewIntegrationGatesInOrder = []reviewtransaction.GateKind{
 	reviewtransaction.GatePrePR, reviewtransaction.GateRelease,
 }
 
+// Placeholder docstring
 func validReviewIntegrationGate(gate reviewtransaction.GateKind) bool {
 	for _, valid := range reviewIntegrationGatesInOrder {
 		if gate == valid {

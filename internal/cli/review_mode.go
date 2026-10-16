@@ -109,6 +109,7 @@ func ReviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDMo
 
 // SetGlobalReviewMode changes only the global review-mode source and returns the
 // resolved status for the requested repository.
+// SetGlobalReviewMode changes only the global review-mode source and returns the resolved status for the requested repository.
 func SetGlobalReviewMode(ctx context.Context, repo string, enabled bool) (reviewtransaction.RDDModeStatus, error) {
 	operation := "disable"
 	if enabled {
@@ -117,6 +118,7 @@ func SetGlobalReviewMode(ctx context.Context, repo string, enabled bool) (review
 	return applyReviewMode(ctx, repo, operation, reviewModeScopeGlobal, "", false)
 }
 
+// reviewModeStatus returns the RDD mode status for the repository, considering both global and clone-local overrides.
 func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
 	global, err := readGlobalRDDMode()
 	if err != nil {
@@ -129,6 +131,7 @@ func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDMo
 	return status, reviewModeUnreadable(ctx, repo, global, err)
 }
 
+// globalOnlyReviewModeStatus returns the RDD mode status considering only the global mode.
 func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtransaction.RDDModeStatus {
 	status := reviewtransaction.RDDModeStatus{
 		Schema:     reviewtransaction.RDDModeStatusSchema,
@@ -161,6 +164,7 @@ type ReviewModeUnreadableScope struct {
 	Repo  string
 }
 
+// label returns a string label for the unreadable scope.
 func (scope ReviewModeUnreadableScope) label() string {
 	if scope.Scope == reviewModeScopeClone {
 		return "clone-local"
@@ -171,6 +175,7 @@ func (scope ReviewModeUnreadableScope) label() string {
 // commands names the two invocations that overwrite this scope. Both are
 // complete as printed: the clone-local scope carries the repository it belongs
 // to, because a clone-local record is only reachable through its own clone.
+// commands returns the list of commands associated with the unreadable scope.
 func (scope ReviewModeUnreadableScope) commands() []string {
 	suffix := " --scope=" + scope.Scope
 	if scope.Scope == reviewModeScopeClone {
@@ -193,8 +198,10 @@ type ReviewModeUnreadableError struct {
 	Cause  error
 }
 
+// Unwrap returns the underlying error for ReviewModeUnreadableError.
 func (err *ReviewModeUnreadableError) Unwrap() error { return err.Cause }
 
+// Error returns the error message for ReviewModeUnreadableError.
 func (err *ReviewModeUnreadableError) Error() string {
 	places := make([]string, 0, len(err.Scopes))
 	commands := make([]string, 0, 2*len(err.Scopes))
@@ -222,8 +229,10 @@ type reviewModeUnsafePathError struct {
 	Cause     error
 }
 
+// Unwrap returns the underlying error for reviewModeUnsafePathError.
 func (err *reviewModeUnsafePathError) Unwrap() error { return err.Cause }
 
+// Error returns the error message for reviewModeUnsafePathError.
 func (err *reviewModeUnsafePathError) Error() string {
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf(
@@ -237,6 +246,7 @@ func (err *reviewModeUnsafePathError) Error() string {
 	)
 }
 
+// repairCommand returns a command to repair the unsafe path error.
 func (err *reviewModeUnsafePathError) repairCommand() string {
 	if runtime.GOOS != "windows" {
 		mode := "600"
@@ -265,14 +275,17 @@ func (err *reviewModeUnsafePathError) repairCommand() string {
 	}, "; ")
 }
 
+// quotePowerShellLiteral returns a PowerShell-quoted version of the path.
 func quotePowerShellLiteral(path string) string {
 	return "'" + strings.ReplaceAll(path, "'", "''") + "'"
 }
 
+// quotePOSIXShellToken returns a POSIX-shell quoted version of the path.
 func quotePOSIXShellToken(path string) string {
 	return "'" + strings.ReplaceAll(path, "'", `'"'"'`) + "'"
 }
 
+// reviewModeUnsafePathRefusal wraps the given error in an unsafe path refusal.
 func reviewModeUnsafePathRefusal(err error) error {
 	var unsafePath *reviewtransaction.UnsafeRARPathError
 	if errors.As(err, &unsafePath) {
@@ -283,12 +296,15 @@ func reviewModeUnsafePathRefusal(err error) error {
 
 type reviewModeRepositoryRequiredError struct{ Cause error }
 
+// Unwrap returns the underlying error for reviewModeRepositoryRequiredError.
 func (err *reviewModeRepositoryRequiredError) Unwrap() error { return err.Cause }
 
+// Error returns the error message for reviewModeRepositoryRequiredError.
 func (err *reviewModeRepositoryRequiredError) Error() string {
 	return "clone-local review mode requires a Git repository; rerun the original command with --cwd pointing at the intended repository, or use `gentle-ai review mode enable --scope global` or `gentle-ai review mode disable --scope global` for machine-wide state"
 }
 
+// reviewModeRepositoryRequiredRefusal wraps the given error in a repository-required refusal.
 func reviewModeRepositoryRequiredRefusal(err error) error {
 	if !reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
 		return nil
@@ -296,6 +312,7 @@ func reviewModeRepositoryRequiredRefusal(err error) error {
 	return &reviewModeRepositoryRequiredError{Cause: err}
 }
 
+// reviewModeCommandsByVerb returns the subset of commands that match the given verb.
 func reviewModeCommandsByVerb(commands []string, verb string) []string {
 	selected := make([]string, 0, len(commands))
 	for _, command := range commands {
@@ -363,6 +380,7 @@ func reviewDrivenDevelopmentDisabled(ctx context.Context, repo string) (bool, er
 	return !status.Enabled(), nil
 }
 
+// applyReviewMode applies the given operation (enable/disable/status) to the review mode for the repository.
 func applyReviewMode(
 	ctx context.Context,
 	repo string,
@@ -409,6 +427,7 @@ func applyReviewMode(
 	return status, reviewModeUnreadable(ctx, repo, global, err)
 }
 
+// readGlobalRDDMode reads the global receipt-driven-development mode from persistent storage.
 func readGlobalRDDMode() (reviewtransaction.RDDGlobalMode, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -428,6 +447,7 @@ func readGlobalRDDMode() (reviewtransaction.RDDGlobalMode, error) {
 	return global, nil
 }
 
+// writeGlobalRDDMode writes the given operation to the global review mode store.
 func writeGlobalRDDMode(operation string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -452,6 +472,7 @@ func writeGlobalRDDMode(operation string) error {
 	})
 }
 
+// emitReviewMode writes the review mode result to stdout in the requested format.
 func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) error {
 	if emitJSON {
 		payload, err := json.MarshalIndent(result, "", "  ")
@@ -497,6 +518,7 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 	return err
 }
 
+// reviewModeLabel returns a human-readable label for the given RDD mode.
 func reviewModeLabel(mode reviewtransaction.RDDMode) string {
 	if mode == reviewtransaction.RDDModeUnset {
 		return "unset"
@@ -645,6 +667,7 @@ func recordReviewConsentNoticeShown(ctx context.Context, repo string) error {
 	return os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0o644)
 }
 
+// reviewConsentNoticeMarkerPath returns the path to the review consent notice marker file.
 func reviewConsentNoticeMarkerPath(ctx context.Context, repo string) (string, error) {
 	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
@@ -680,6 +703,7 @@ func reviewConsoleInteractive() bool {
 	return reviewConsoleTerminal(os.Stdin) && reviewConsoleTerminal(os.Stderr)
 }
 
+// reviewConsoleTerminal returns true if the given file is a terminal.
 func reviewConsoleTerminal(file *os.File) bool {
 	info, err := file.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
@@ -799,6 +823,7 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	}
 }
 
+// recordReviewConsentAsked records that the review consent was asked for the given repository.
 func recordReviewConsentAsked(ctx context.Context, repo string) error {
 	if err := reviewtransaction.RecordRDDConsentAsked(ctx, repo); err != nil {
 		return fmt.Errorf("record the review question as asked: %w", err)
@@ -823,6 +848,7 @@ func readReviewConsentAnswer(input io.Reader) (string, error) {
 	return answer, nil
 }
 
+// reviewConsentPrompt returns the prompt string for the given risk assessment.
 func reviewConsentPrompt(assessment reviewtransaction.RiskAssessment) string {
 	return fmt.Sprintf("%s\nWhy: %s\n%s\n%s%s%s",
 		reviewConsentHeadline, reviewConsentReason(assessment), reviewConsentValue,
@@ -920,6 +946,7 @@ func reviewConsentEvidencePhrases(reasons []reviewtransaction.RiskReason) []stri
 	return phrases
 }
 
+// reviewConsentEvidencePhrase returns the evidence phrase for the given risk reason.
 func reviewConsentEvidencePhrase(reason reviewtransaction.RiskReason) string {
 	// An empty file is named first and described second. Every other subject
 	// reads "<what changed> in <path>", which for a file with no bytes would
@@ -937,6 +964,7 @@ func reviewConsentEvidencePhrase(reason reviewtransaction.RiskReason) string {
 	return fmt.Sprintf("%s in %s", subject, reason.Path)
 }
 
+// reviewConsentEvidenceSubject returns the evidence subject for the given risk reason.
 func reviewConsentEvidenceSubject(reason reviewtransaction.RiskReason) string {
 	switch reason.Code {
 	case reviewtransaction.RiskReasonServiceToken:
@@ -958,6 +986,7 @@ func reviewConsentEvidenceSubject(reason reviewtransaction.RiskReason) string {
 	}
 }
 
+// reviewConsentSignalSubject returns a log subject string for the given risk signal.
 func reviewConsentSignalSubject(signal reviewtransaction.RiskSignal) string {
 	switch signal {
 	case reviewtransaction.SignalAuth:

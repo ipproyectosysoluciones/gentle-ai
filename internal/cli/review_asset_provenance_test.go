@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 )
 
+// TestManagedReviewerAssetProvenanceAuthorityBoundary tests that the asset provenance authority boundary is respected.
 func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 	for name, run := range map[string]func(*testing.T, string, string) (bool, error){
 		"read-only recovery": func(t *testing.T, home, repo string) (bool, error) {
@@ -96,6 +97,7 @@ func TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew(t *testing.T) {
 		requireManagedAssetProvenanceError(t, authorizeManagedReviewerAssets(), managedAssetProvenanceRefusal)
 	})
 }
+// TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority tests that stale managed assets are classified before authority is negotiated.
 
 func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *testing.T) {
 	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
@@ -137,8 +139,10 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 	if err := malformedFailure.Validate(); err == nil {
 		t.Fatal("FAILURE accepted a multiline managed-assets continuation command")
 	}
+// TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts tests that the review starts when managed assets are current.
 }
 
+// TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts tests that the review starts when managed assets are current.
 func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) {
 	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/current-assets.md", "# Candidate\n", 0o644)
@@ -563,9 +567,11 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 	if converged.NextTransition == nil || converged.NextTransition.Kind != reviewNextTransitionExecute ||
 		converged.NextTransition.ReasonCode != "fresh_target_ready" {
 		t.Fatalf("post-continuation STATUS transition = %#v, want execute/fresh_target_ready", converged.NextTransition)
+// TestManagedAssetsContinuationRejectsUnsafeExecutableIdentities tests that unsafe executable identifiers are rejected in the continuation.
 	}
 }
 
+// TestManagedAssetsContinuationRejectsUnsafeExecutableIdentities tests that unsafe executable identifiers are rejected in the continuation.
 func TestManagedAssetsContinuationRejectsUnsafeExecutableIdentities(t *testing.T) {
 	absoluteArgvZero := filepath.Join(t.TempDir(), "gentle-ai")
 	for _, test := range []struct {
@@ -614,10 +620,12 @@ func TestManagedAssetsContinuationRejectsUnsafeExecutableIdentities(t *testing.T
 			if strings.ContainsAny(continuation.Command, "\r\n") || continuation.Command != test.want {
 				t.Fatalf("continuation command = %q, want %q", continuation.Command, test.want)
 			}
+// TestManagedAssetsPreflightDoesNotClassifyUnrelatedRuntimeRefusal tests that unrelated runtime refusals are not classified as managed asset issues.
 		})
 	}
 }
 
+// TestManagedAssetsPreflightDoesNotClassifyUnrelatedRuntimeRefusal tests that unrelated runtime refusals are not classified as managed asset issues.
 func TestManagedAssetsPreflightDoesNotClassifyUnrelatedRuntimeRefusal(t *testing.T) {
 	failure := newReviewIntegrationFailure("review.start", nil, errors.New("unrelated runtime refusal"))
 	if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_running" ||
@@ -741,17 +749,20 @@ func recordManagedAssetDigest(t *testing.T, home, digest string) {
 	// an absent state file seeds an empty one rather than failing the fixture.
 	persisted, err := state.Read(home)
 	if err != nil && !os.IsNotExist(err) {
+// requireManagedAssetProvenanceNoError is a helper that asserts the error is nil.
 		t.Fatal(err)
 	}
 	persisted.ManagedAssetDigest = digest
 	requireManagedAssetProvenanceNoError(t, state.Write(home, persisted))
 }
+// requireManagedAssetProvenanceError is a helper that asserts the error matches the expected string.
 func requireManagedAssetProvenanceNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
 	}
 }
+// requireManagedAssetProvenanceError is a helper that asserts the error matches the expected string.
 func requireManagedAssetProvenanceError(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil || !bytes.Contains([]byte(err.Error()), []byte(want)) {
