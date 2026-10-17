@@ -13,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/storage"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
@@ -409,7 +411,11 @@ func checkStateJSON(homeDir string) CheckResult {
 	var missing []string
 	var dangling []string
 	for _, agentID := range s.InstalledAgents {
-		if dir := agentConfigDir(homeDir, agentID); dir != "" {
+		dir, err := agentConfigDir(homeDir, agentID)
+		if err != nil {
+			dir = ""
+		}
+		if dir != "" {
 			info, lstatErr := os.Lstat(dir)
 			if os.IsNotExist(lstatErr) {
 				// A missing final path is only genuinely missing when its
@@ -511,32 +517,21 @@ func danglingAncestor(homeDir, path string) (string, error) {
 }
 
 // agentConfigDir returns the expected config directory for a known agent ID.
-func agentConfigDir(homeDir, agentID string) string {
-	cfgBase := filepath.Join(homeDir, ".config")
+func agentConfigDir(homeDir, agentID string) (string, error) {
 	switch agentID {
-	case "claude-code":
-		return filepath.Join(homeDir, ".claude")
-	case "opencode":
-		return filepath.Join(cfgBase, "opencode")
-	case "cursor":
-		return filepath.Join(homeDir, ".cursor")
-	case "windsurf":
-		return filepath.Join(homeDir, ".codeium", "windsurf")
-	case "vscode":
-		return filepath.Join(cfgBase, "Code")
 	case "codex":
-		return system.CodexConfigDir(homeDir)
-	case "kiro":
-		return filepath.Join(homeDir, ".kiro")
+		return system.CodexConfigDir(homeDir), nil
 	default:
-		return ""
+		adapter, err := agents.NewAdapter(model.AgentID(agentID))
+		if err != nil {
+			return "", err
+		}
+		if !adapter.SupportsSkills() && !adapter.SupportsSystemPrompt() && !adapter.SupportsMCP() {
+			return "", nil
+		}
+		return adapter.GlobalConfigDir(homeDir), nil
 	}
 }
-
-// checkEngramReachable probes the configured Engram transport. An explicit
-// ENGRAM_BASE_URL selects HTTP; otherwise the doctor reads the stdio command
-// and arguments persisted in installed agent configurations. It never guesses
-// an HTTP address or replaces a persisted command with its current PATH.
 func checkEngramReachable(ctx context.Context, homeDir string, installedAgents []string) CheckResult {
 	const id = doctor.CheckEngramReachable
 
