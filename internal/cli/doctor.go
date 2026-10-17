@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/storage"
 )
@@ -679,17 +680,22 @@ func danglingAncestor(homeDir, path string) (string, error) {
 
 // agentConfigDir uses the same adapter paths as installation and sync. An
 // empty path means a known detection-only agent, not an unrecognized ID.
-func agentConfigDir(homeDir, agentID string) (string, error) {
-	adapter, err := agents.NewAdapter(model.AgentID(agentID))
-	if err != nil {
-		return "", err
-	}
-	if !adapter.SupportsSkills() && !adapter.SupportsSystemPrompt() && !adapter.SupportsMCP() {
-		return "", nil
-	}
-	return adapter.GlobalConfigDir(homeDir), nil
-}
 
+func agentConfigDir(homeDir, agentID string) (string, error) {
+	switch agentID {
+	case "codex":
+		return system.CodexConfigDir(homeDir), nil
+	default:
+		adapter, err := agents.NewAdapter(model.AgentID(agentID))
+		if err != nil {
+			return "", err
+		}
+		if !adapter.SupportsSkills() && !adapter.SupportsSystemPrompt() && !adapter.SupportsMCP() {
+			return "", nil
+		}
+		return adapter.GlobalConfigDir(homeDir), nil
+	}
+}
 // checkEngramReachable probes the configured Engram transport. An explicit
 // ENGRAM_BASE_URL selects HTTP; otherwise the doctor reads the stdio command
 // and arguments persisted in installed agent configurations. It never guesses
