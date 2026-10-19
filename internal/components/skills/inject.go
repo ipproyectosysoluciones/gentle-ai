@@ -29,7 +29,7 @@ type InjectionResult struct {
 }
 
 // InjectWithCapability writes retained skill files for the given capability.
-func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
+func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, capability string, conciliate bool) (InjectionResult, error) {
 	if !adapter.SupportsSkills() {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
@@ -38,7 +38,7 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
-	result, err := InjectDirectoryWithCapability(skillDir, skillIDs, capability)
+	result, err := InjectDirectoryWithCapability(skillDir, skillIDs, capability, conciliate)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -110,9 +110,9 @@ func directoryAssets(skillDir string, skillIDs []model.SkillID, capability strin
 // InjectDirectoryWithCapability writes skills directly to an already-selected
 // skills directory. Operation-level compatibility refreshes use this to avoid
 // routing the shared directory through every selected agent adapter.
-func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
-	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, filemerge.WriteFileAtomic)
-}
+func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string, conciliate bool) (InjectionResult, error) {
+	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, conciliate, filemerge.WriteFileAtomic)
+	}
 
 // InjectDirectoryWithWriter refreshes the shared ~/.agents/skills
 // compatibility root with a caller-selected writer, keeping its
@@ -124,7 +124,7 @@ func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, ca
 // whether a file was removed and is responsible for only removing a regular
 // file.
 func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeFile func(string) (bool, error)) (InjectionResult, error) {
-	result, err := InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", writeFile)
+	result, err := InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", false, writeFile)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -147,7 +147,7 @@ func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeF
 }
 
 // InjectDirectoryWithCapabilityWithWriter writes skills with a caller-selected writer.
-func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, conciliate bool, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
 	entries, skipped, err := directoryAssets(skillDir, skillIDs, capability)
 	if err != nil {
 		return InjectionResult{}, err
@@ -213,7 +213,7 @@ func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.S
 	return result, nil
 }
 func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
-	return InjectWithCapability(homeDir, adapter, skillIDs, "")
+	return InjectWithCapability(homeDir, adapter, skillIDs, "", false)
 }
 
 // SkillPathForAgent returns the filesystem path where a skill file would be written.
@@ -231,4 +231,8 @@ func SkillPathForAgent(homeDir string, adapter agents.Adapter, id model.SkillID)
 // the full content is returned.
 func extractModelSection(content, capability string) string {
 	return filemerge.ExtractHTMLCommentSection(content, "model-"+capability)
+}
+
+func InjectWithConciliate(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, conciliate bool) (InjectionResult, error) {
+	return InjectWithCapability(homeDir, adapter, skillIDs, "", conciliate)
 }
