@@ -19,6 +19,7 @@ type InstallFlags struct {
 	DryRun     bool
 	Conciliate	bool
 
+	Conciliate bool
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
 
@@ -92,6 +93,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 	fs.BoolVar(&opts.Conciliate, "conciliate", false, "run conciliation step to reconcile managed guidance and skills with pre-existing user instructions")
 
+	fs.BoolVar(&opts.Conciliate, "conciliate", false, "run conciliation step to reconcile managed guidance and skills with pre-existing user instructions")
 	if err := fs.Parse(args); err != nil {
 		return InstallFlags{}, err
 	}
