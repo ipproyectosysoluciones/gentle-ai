@@ -270,7 +270,7 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 				"will be written to each selected agent's global config directory and will affect ALL workspaces for those agents on this machine.\n"+
 				"To install only into the current workspace, rerun with --scope=workspace.\n\n")
 	}
-	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Channel, input.Selection, resolved, profile)
+	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Channel, input.Selection, resolved, profile, input.Conciliate)
 	if err != nil {
 		return result, err
 	}
@@ -800,6 +800,7 @@ type runtimeState struct {
 	// codexServiceTier is the tier the global engram injection left in Codex's
 	// config.toml (nil = not written); state records it as the managed tier.
 	codexServiceTier *string
+	Conciliate bool
 }
 
 func (s *runtimeState) cleanupRollbackSnapshot() {
@@ -3492,7 +3493,7 @@ func executeTUIInstall(homeDir string, selection model.Selection, resolved plann
 	if err := validatePiPackageInstall(homeDir, resolved.Agents); err != nil {
 		return pipeline.ExecutionResult{Err: err}, nil, nil
 	}
-	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
+	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile, false)
 	if err != nil {
 		return pipeline.ExecutionResult{Err: err}, nil, nil
 	}

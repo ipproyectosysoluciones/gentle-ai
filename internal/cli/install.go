@@ -17,6 +17,7 @@ type InstallFlags struct {
 	Scope      string
 	Channel    string
 	DryRun     bool
+	Conciliate	bool
 
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
@@ -89,6 +90,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	registerListFlag(fs, "pi-exclude-package", &opts.PiExcludePackages)
 	fs.BoolVar(&opts.ClaudeOrchestratorModules, "claude-orchestrator-modules", false, "global Claude only: install the orchestrator as a core plus on-demand modules")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
+	fs.BoolVar(&opts.Conciliate, "conciliate", false, "run conciliation step to reconcile managed guidance and skills with pre-existing user instructions")
 
 	if err := fs.Parse(args); err != nil {
 		return InstallFlags{}, err
