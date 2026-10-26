@@ -29,6 +29,7 @@ type UserShellUpdate struct {
 	Channel    string
 	Available  bool
 	Components []string
+	Scope      []string
 	Detail     string
 }
 
@@ -409,6 +410,7 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		if manifest.MainCommit == "" {
 			update.Available = true
 			update.Components = []string{"SDK Main snapshot"}
+			update.Scope = []string{UserComponentSDK}
 			update.Detail = "Main SDK is not installed in this tree yet"
 			return update, nil
 		}
@@ -419,6 +421,7 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		if latest.SHA != manifest.MainArchiveSHA {
 			update.Available = true
 			update.Components = []string{"SDK Main snapshot"}
+			update.Scope = []string{UserComponentSDK}
 			update.Detail = "new Main snapshot available"
 		}
 		return update, nil
@@ -438,23 +441,90 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	if manifest.MainCommit != "" {
 		update.Available = true
 		update.Components = []string{"SDK Main snapshot"}
+		update.Scope = []string{UserComponentSDK}
 		update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
 		return update, nil
 	}
+	changed := map[string]bool{}
 	if userWindowsSHA(image) != manifest.SupervisorSHA {
-		update.Available = true
-		update.Components = append(update.Components, "Gentle Shell supervisor")
+		changed[UserComponentSupervisor] = true
 	}
 	node, err := userWindowsRead(filepath.Join(install.Target, "runtime", "node", "node.exe"), 256<<20)
 	if err != nil {
 		return update, err
 	}
 	if userWindowsSHA(node) != userWindowsArtifacts[0].SHA {
-		update.Available = true
-		update.Components = append(update.Components, "Node runtime")
+		changed[UserComponentNode] = true
 	}
-	if update.Available {
-		update.Detail = "stable channel components differ from this build"
+	// Component pins: a legacy manifest without the pins refreshes the
+	// missing components once, so the next update records them.
+	legacy := manifest.SDKLockSHA == ""
+	if lock, err := userWindowsSDKLockSHA(); err == nil && manifest.SDKLockSHA != lock {
+		changed[UserComponentSDK] = true
 	}
+	if tools, err := userWindowsToolsPinSHA(); err == nil && manifest.ToolsSHA != tools {
+		changed[UserComponentSDK] = true
+	}
+	if pin, err := userWindowsGoPinSHA(); err == nil && manifest.GoSHA != pin {
+		changed[UserComponentNode] = true // The Go runtime is acquired with the Node runtime.
+	}
+	if manifest.CodeGraph {
+		if pin, err := userWindowsCodeGraphPinSHA(); err == nil && manifest.CodeGraphSHA != pin {
+			changed[UserComponentCodeGraph] = true
+		}
+	}
+	if legacy {
+		if _, err := os.Lstat(filepath.Join(install.Target, "runtime", "codegraph")); err == nil {
+			changed[UserComponentCodeGraph] = true
+		}
+		if _, err := os.Lstat(filepath.Join(install.Target, "agent", "mcp.json")); err == nil {
+			changed[UserComponentContext7] = true
+		}
+	} else if choice, ok := userWindowsInstalledContext7Choice(install.Target); ok {
+		if pin, err := userWindowsContext7EntrySHA(choice); err == nil && manifest.Context7SHA != pin {
+			changed[UserComponentContext7] = true
+		}
+	}
+	if len(changed) == 0 {
+		return update, nil
+	}
+	update.Available = true
+	update.Scope = userSortedComponents(changed)
+	labels := map[string]string{
+		UserComponentSupervisor: "Gentle Shell supervisor",
+		UserComponentNode:       "Node runtime",
+		UserComponentSDK:        "gentle-pi SDK",
+		UserComponentCodeGraph:  "CodeGraph",
+		UserComponentContext7:   "Context7",
+	}
+	for _, component := range update.Scope {
+		update.Components = append(update.Components, labels[component])
+	}
+	update.Detail = "stable channel components differ from this build"
 	return update, nil
+}
+
+// userWindowsInstalledContext7Choice reports the persisted Context7 choice
+// of the installed agent: the enabled bit of its canonical mcp.json entry.
+func userWindowsInstalledContext7Choice(target string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(target, "agent", "mcp.json"))
+	if err != nil || len(data) > 1<<20 {
+		return "", false
+	}
+	var mcp struct {
+		Servers map[string]struct {
+			Enabled bool `json:"enabled"`
+		} `json:"mcpServers"`
+	}
+	if json.Unmarshal(data, &mcp) != nil {
+		return "", false
+	}
+	entry, ok := mcp.Servers["context7"]
+	if !ok {
+		return "", false
+	}
+	if entry.Enabled {
+		return "on", true
+	}
+	return "off", true
 }

@@ -30,6 +30,12 @@ type userWindowsManifest struct {
 	PrefixIdentity, AgentIdentity                     string
 	SelectionSHA                                      string
 	MainCommit, MainArchiveSHA, LockSHA               string
+	// Component pins recorded at install time. An empty pin on an otherwise
+	// valid manifest is the pre-pin legacy layout: the update check then
+	// reports the component as changed so the next update refreshes it.
+	SDKLockSHA, ToolsSHA, GoSHA string
+	CodeGraph                   bool `json:"codegraph,omitempty"`
+	CodeGraphSHA, Context7SHA   string
 }
 
 func UserKernelCheck() error {
@@ -450,6 +456,16 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil || confirmation != req.Confirmation {
 		return result, errors.Join(err, errors.New("physical Windows selection confirmation differs"))
 	}
+	var backup string
+	// A component-scoped update reuses the recorded installation: the scope is
+	// bound to the reconfigure target and the recorded manifest supplies the
+	// trusted component sources. An empty scope is a full install.
+	scope, scopeErr := userInstallScopeOf(req)
+	if scopeErr != nil {
+		return result, scopeErr
+	}
+	var installed *userWindowsManifest
+	goReuse := false
 	if _, err := os.Lstat(req.Destination); err == nil {
 		// A reconfigure/replace of the managed target (channel switch or
 		// component update) is a fresh install over a retired backup, so the
@@ -490,7 +506,26 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 		// Reconfigure: retire the previous tree to its .replaced- backup so the
 		// fresh install below can publish into the confirmed destination.
-		backup := req.Destination + ".replaced-" + time.Now().UTC().Format("20060102T150405Z")
+		// Read the recorded manifest before the retire rename moves it away.
+		if !scope.full {
+			if userWindowsReconfigureTarget() != req.Destination {
+				return result, errors.New("a component update requires the reconfigure target binding")
+			}
+			recorded, manifestErr := userWindowsManifestRead(req.Destination)
+			if manifestErr != nil {
+				return result, fmt.Errorf("component update requires a recorded installation: %w", manifestErr)
+			}
+			installed = &recorded
+			if pin, pinErr := userWindowsGoPinSHA(); pinErr == nil && scope.reused[UserComponentNode] && installed.GoSHA == pin {
+				goReuse = true
+			}
+		} else if recorded, manifestErr := userWindowsManifestRead(req.Destination); manifestErr == nil {
+			// A full reconfigure of a recorded installation still rebuilds a
+			// fresh stage, so the operator state is carried from the recorded
+			// agent.
+			installed = &recorded
+		}
+		backup = req.Destination + ".replaced-" + time.Now().UTC().Format("20060102T150405Z")
 		if _, err := os.Lstat(backup); !os.IsNotExist(err) {
 			return result, errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
 		}
@@ -502,9 +537,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
 	}
+	if !scope.full && installed == nil {
+		return result, errors.New("a component update requires a recorded installation")
+	}
 	var mainArtifact userWindowsArtifact
 	var mainData []byte
-	if channel == "main" {
+	if channel == "main" && !scope.reused[UserComponentSDK] {
 		fmt.Fprintln(os.Stderr, "Windows install phase: main-acquire")
 		mainArtifact, mainData, err = userWindowsMainSnapshot(ctx) // Confirmed choice, before first filesystem effect.
 		if err != nil {
@@ -544,13 +582,21 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	}
+	// Component reuse copies the out-of-scope trees of the retired
+	// installation into the stage before anything acquires or provisions.
+	if !scope.full {
+		fmt.Fprintln(os.Stderr, "Windows install phase: component-reuse")
+		if err := userWindowsReuseComponents(ctx, stage, backup, installed, req, scope, goReuse); err != nil {
+			return result, err
+		}
+	}
 	// System-Go reuse is decided before any artifact is downloaded: a caller
 	// go.exe that passes the full reuse contract replaces the pinned go.zip
 	// acquisition and is recorded inside the staged target itself. Anything
 	// else falls back to the pinned artifact unchanged.
 	fmt.Fprintln(os.Stderr, "Windows install phase: system-go-detect")
 	systemGo, systemGoOK := userWindowsSystemGoDetect(ctx)
-	if systemGoOK {
+	if systemGoOK && !goReuse {
 		if err := userWindowsSystemGoStage(stage, systemGo); err != nil {
 			return result, err
 		}
@@ -562,6 +608,14 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-acquire")
 	codegraph := make(chan error, 1)
 	go func() {
+		if scope.reused[UserComponentCodeGraph] && req.Experience != nil && req.Experience.CodeGraph == "on" {
+			if err := userWindowsReuseTree(ctx, filepath.Join(backup, "runtime", "codegraph"), filepath.Join(stage, "runtime", "codegraph")); err != nil {
+				codegraph <- fmt.Errorf("CodeGraph reuse: %w", err)
+				return
+			}
+			codegraph <- userWindowsCodeGraphCommand(ctx, stage)
+			return
+		}
 		codegraph <- userWindowsCodeGraphProvision(ctx, stage, req.Experience)
 	}()
 	// The Windows stock provision helper requires its exact six-field
@@ -584,8 +638,14 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	fetched := make([]fetchedArtifact, len(userWindowsArtifacts))
 	var downloads sync.WaitGroup
 	for index, artifact := range userWindowsArtifacts {
-		if userWindowsGoZipSkipped(systemGoOK, artifact.Archive) {
-			continue // System Go reused: the pinned Go artifact is never acquired.
+		if userWindowsGoZipSkipped(systemGoOK, artifact.Archive) || (index == 1 && goReuse) {
+			continue // System Go reused or the recorded Go runtime is reused: the pinned Go artifact is never acquired.
+		}
+		if index == 0 && scope.reused[UserComponentNode] {
+			continue // The installed Node runtime is reused.
+		}
+		if index >= 2 && scope.reused[UserComponentSDK] {
+			continue // The reused agent carries the pinned tools.
 		}
 		phase("acquire", artifact.Archive)
 		downloads.Add(1)
@@ -597,8 +657,14 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	downloads.Wait()
 	for index, artifact := range userWindowsArtifacts {
-		if userWindowsGoZipSkipped(systemGoOK, artifact.Archive) {
-			continue // The reused system Go needs no unpacked runtime/go tree.
+		if userWindowsGoZipSkipped(systemGoOK, artifact.Archive) || (index == 1 && goReuse) {
+			continue // The reused system/recorded Go needs no unpacked runtime/go tree.
+		}
+		if index == 0 && scope.reused[UserComponentNode] {
+			continue // The installed Node runtime is reused.
+		}
+		if index >= 2 && scope.reused[UserComponentSDK] {
+			continue // The reused agent carries the pinned tools.
 		}
 		if fetched[index].err != nil {
 			return result, fetched[index].err
@@ -669,11 +735,15 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	phase("provision", "stock")
-	if err := userWindowsProvision(ctx, stage, "install", io.Discard, os.Stderr); err != nil {
-		return result, err
+	if !scope.reused[UserComponentSDK] {
+		if err := userWindowsProvision(ctx, stage, "install", io.Discard, os.Stderr); err != nil {
+			return result, err
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "Windows install phase: provision-reused stock")
 	}
 	phase("provision-ready", "stock")
-	if channel == "main" {
+	if channel == "main" && !scope.reused[UserComponentSDK] {
 		fmt.Fprintln(os.Stderr, "Windows install phase: overlay main")
 		if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
 			return result, err
@@ -703,6 +773,15 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 		fmt.Fprintln(os.Stderr, "Windows install phase: overlay-ready main")
+	}
+	if installed != nil && !scope.reused[UserComponentSDK] {
+		// A rebuilt agent must not look like a fresh installation to the
+		// operator: provider logins, sessions, project state and user models
+		// survive every update through the retired installation's agent.
+		fmt.Fprintln(os.Stderr, "Windows install phase: carry-operator-state")
+		if err := userCarryAgentState(ctx, filepath.Join(backup, "agent"), filepath.Join(stage, "agent")); err != nil {
+			return result, fmt.Errorf("operator state carry: %w", err)
+		}
 	}
 	for _, product := range []string{"pi", "gentle-shell"} {
 		if err := userWindowsWrite(filepath.Join(stage, "bin", product+".cmd"), userWindowsBinding(req.Destination, product)); err != nil {
@@ -734,7 +813,44 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	manifest := userWindowsManifest{Schema: userWindowsSchema, Destination: req.Destination, SID: sid, Identity: stageIdentity, SupervisorSHA: userWindowsSHA(image), PrefixIdentity: prefixID, AgentIdentity: agentID, SelectionSHA: userWindowsSHA(selection), LockSHA: userWindowsSHA(lock)}
 	if channel == "main" {
-		manifest.MainCommit, manifest.MainArchiveSHA = strings.TrimPrefix(mainArtifact.Prefix, "gentle-shell-"), mainArtifact.SHA
+		if !scope.reused[UserComponentSDK] {
+			manifest.MainCommit, manifest.MainArchiveSHA = strings.TrimPrefix(mainArtifact.Prefix, "gentle-shell-"), mainArtifact.SHA
+		} else if installed != nil {
+			manifest.MainCommit, manifest.MainArchiveSHA = installed.MainCommit, installed.MainArchiveSHA
+		}
+	}
+	// Component pins: the recorded pins let the next update check scope
+	// itself. The provision helper digest covers the stock dependency seed;
+	// the CodeGraph and Context7 pins derive from this build's composition.
+	if pin, pinErr := userWindowsSDKLockSHA(); pinErr == nil {
+		manifest.SDKLockSHA = pin
+	} else {
+		return result, pinErr
+	}
+	if pin, pinErr := userWindowsToolsPinSHA(); pinErr == nil {
+		manifest.ToolsSHA = pin
+	} else {
+		return result, pinErr
+	}
+	if pin, pinErr := userWindowsGoPinSHA(); pinErr == nil {
+		manifest.GoSHA = pin
+	} else {
+		return result, pinErr
+	}
+	manifest.CodeGraph = req.Experience != nil && req.Experience.CodeGraph == "on"
+	if manifest.CodeGraph {
+		if pin, pinErr := userWindowsCodeGraphPinSHA(); pinErr == nil {
+			manifest.CodeGraphSHA = pin
+		} else {
+			return result, pinErr
+		}
+	}
+	if req.Experience != nil && req.Experience.Context7 != "" {
+		if pin, pinErr := userWindowsContext7EntrySHA(req.Experience.Context7); pinErr == nil {
+			manifest.Context7SHA = pin
+		} else {
+			return result, pinErr
+		}
 	}
 	encoded, _ := json.Marshal(manifest)
 	if err := userWindowsWrite(filepath.Join(stage, "manifest.json"), append(encoded, '\n')); err != nil {

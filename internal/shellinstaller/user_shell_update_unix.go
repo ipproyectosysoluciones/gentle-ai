@@ -4,16 +4,26 @@ package shellinstaller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 )
 
 // UserShellUpdate is channel-scoped update availability. The check follows
 // the persisted SDK source preference (Stable ↔ stable update, Main preview ↔
 // latest Main snapshot) and never changes preferences or installs anything.
+//
+// Components carries human-readable labels for display; Scope carries the
+// canonical component names (UserComponent*) for the scoped update request.
+// An installation whose manifest predates the component pins reports the
+// missing pins as changed: the next update refreshes those components once
+// and records their pins.
 type UserShellUpdate struct {
 	Channel    string
 	Available  bool
 	Components []string
+	Scope      []string
 	Detail     string
 }
 
@@ -35,55 +45,136 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		}
 	}
 	update := UserShellUpdate{Channel: channel}
+	changed := map[string]bool{}
 	if channel == "main-preview" {
 		if manifest.MainSDK == nil {
+			changed[UserComponentSDK] = true
+			update.Detail = "Main SDK is not installed in this tree yet"
+		} else {
+			latest, _, err := userMainSnapshot(ctx)
+			if err != nil {
+				return update, err
+			}
+			if latest.SHA != manifest.MainSDK.SHA {
+				changed[UserComponentSDK] = true
+				update.Detail = "new Main snapshot available"
+			}
+		}
+	} else {
+		// A Main composition with a Stable preference is itself the channel
+		// delta: Update-now routes it to the in-place overlay, which restores
+		// the stock declaration without reinstalling any component.
+		if manifest.MainSDK != nil {
 			update.Available = true
 			update.Components = []string{"SDK Main snapshot"}
-			update.Detail = "Main SDK is not installed in this tree yet"
+			update.Scope = []string{UserComponentSDK}
+			update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
 			return update, nil
 		}
-		latest, _, err := userMainSnapshot(ctx)
+		// userExecutable names the physical executable spelling on darwin; the
+		// supervisor provenance guard requires the canonical path.
+		self, err := userExecutable()
 		if err != nil {
 			return update, err
 		}
-		if latest.SHA != manifest.MainSDK.SHA {
-			update.Available = true
-			update.Components = []string{"SDK Main snapshot"}
-			update.Detail = "new Main snapshot available"
+		supervisor, err := userSupervisorSHA(ctx, self)
+		if err != nil {
+			return update, err
 		}
-		return update, nil
+		if supervisor != manifest.SupervisorSHA {
+			changed[UserComponentSupervisor] = true
+		}
+		if manifest.NodeSHA != privateNativeNodeSHA {
+			changed[UserComponentNode] = true
+		}
+		lock, err := userSDKLockSHA()
+		if err != nil {
+			return update, err
+		}
+		if manifest.SDKLockSHA != lock {
+			changed[UserComponentSDK] = true
+		}
 	}
-	// userExecutable names the physical executable spelling on darwin; the
-	// supervisor provenance guard requires the canonical path.
-	self, err := userExecutable()
+	// The pinned agent tools are part of the SDK component on every channel:
+	// a reused agent whose bound binaries no longer match this build would
+	// fail the bind verification at update time.
+	tools, err := userToolsPinSHA()
 	if err != nil {
 		return update, err
 	}
-	supervisor, err := userSupervisorSHA(ctx, self)
-	if err != nil {
-		return update, err
+	if manifest.ToolsSHA != tools {
+		changed[UserComponentSDK] = true
 	}
-	// A Main composition with a Stable preference is itself the channel
-	// delta: Update-now routes it to the in-place overlay, which restores the
-	// stock declaration without reinstalling any component.
-	if manifest.MainSDK != nil {
-		update.Available = true
-		update.Components = []string{"SDK Main snapshot"}
-		update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
+	if manifest.CodeGraph {
+		pin, err := userCodeGraphPinSHA()
+		if err != nil {
+			return update, err
+		}
+		if manifest.CodeGraphSHA != pin {
+			changed[UserComponentCodeGraph] = true
+		}
+	}
+	if choice, ok := userInstalledContext7Choice(install.Target); ok {
+		pin, err := userContext7EntrySHA(choice)
+		if err != nil {
+			return update, err
+		}
+		if manifest.Context7SHA != pin {
+			changed[UserComponentContext7] = true
+		}
+	}
+	if len(changed) == 0 {
 		return update, nil
 	}
-	if supervisor != manifest.SupervisorSHA {
-		update.Available = true
-		update.Components = append(update.Components, "Gentle Shell supervisor")
+	update.Available = true
+	update.Scope = userSortedComponents(changed)
+	sdkLabel := "gentle-pi SDK"
+	if channel == "main-preview" {
+		sdkLabel = "SDK Main snapshot"
 	}
-	if manifest.NodeSHA != privateNativeNodeSHA {
-		update.Available = true
-		update.Components = append(update.Components, "Node runtime")
+	labels := map[string]string{
+		UserComponentSupervisor: "Gentle Shell supervisor",
+		UserComponentNode:       "Node runtime",
+		UserComponentSDK:        sdkLabel,
+		UserComponentCodeGraph:  "CodeGraph",
+		UserComponentContext7:   "Context7",
 	}
-	if update.Available {
+	for _, component := range update.Scope {
+		update.Components = append(update.Components, labels[component])
+	}
+	if update.Detail == "" {
 		update.Detail = "stable channel components differ from this build"
 	}
 	return update, nil
+}
+
+// userInstalledContext7Choice reports the persisted Context7 choice of the
+// installed agent: the enabled bit of its canonical mcp.json entry.
+func userInstalledContext7Choice(target string) (string, bool) {
+	manifest, err := userReadInstallationManifest(target)
+	if err != nil {
+		return "", false
+	}
+	data, err := os.ReadFile(filepath.Join(manifest.Agent, "mcp.json"))
+	if err != nil || len(data) > 1<<20 {
+		return "", false
+	}
+	var mcp struct {
+		Servers map[string]struct {
+			Enabled bool `json:"enabled"`
+		} `json:"mcpServers"`
+	}
+	if json.Unmarshal(data, &mcp) != nil {
+		return "", false
+	}
+	entry, ok := mcp.Servers["context7"]
+	if !ok {
+		return "", false
+	}
+	if entry.Enabled {
+		return "on", true
+	}
+	return "off", true
 }
 
 var ErrUserShellUpdateUnavailable = errors.New("update check unavailable")

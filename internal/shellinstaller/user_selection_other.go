@@ -20,12 +20,24 @@ type UserInstallRequest struct {
 	SharedAgent  string
 	Confirmation string
 	Experience   *UserExperience `json:",omitempty"`
+	// Scope lists the components to refresh as the canonical comma-separated
+	// component names (supervisor, node, sdk, codegraph, context7; see
+	// UserComponent*). Empty is a full install: every component is provisioned
+	// fresh. Components outside the scope are reused from the existing
+	// installation at Destination instead of re-provisioned. The field stays a
+	// comparable string so inspected requests keep their value semantics.
+	Scope string `json:",omitempty"`
 }
 
 // Confirmation binds the human's approval to the inspected physical selection,
-// not a boolean flag or an unvalidated path alias.
+// not a boolean flag or an unvalidated path alias. The component scope is part
+// of the approved selection: a different scope yields a different token.
 func userConfirmation(req UserInstallRequest, identity string) string {
-	data, err := userExperienceConfirmationData([]string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, identity}, req.Experience)
+	fields := []string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, identity}
+	if req.Scope != "" {
+		fields = append(fields, req.Scope)
+	}
+	data, err := userExperienceConfirmationData(fields, req.Experience)
 	if err != nil {
 		return ""
 	}

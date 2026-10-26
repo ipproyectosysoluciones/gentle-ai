@@ -21,11 +21,18 @@ type userManifest struct {
 	PNPM                                     *userPNPMManifest `json:"pnpm,omitempty"`
 	Schema, Destination, Prefix, Agent, Mode string
 	SupervisorSHA, NodeSHA                   string
-	PrefixIdentity, AgentIdentity            string
-	GGA                                      bool                  `json:"gga,omitempty"`
-	CodeGraph                                bool                  `json:"codegraph,omitempty"`
-	MainSDK                                  *userSnapshotArtifact `json:"main_sdk,omitempty"`
-	Replaced                                 string                `json:"replaced,omitempty"`
+	// Component pins recorded at install time. An empty pin on an otherwise
+	// valid manifest is the pre-pin legacy layout: the update check then
+	// reports the component as changed so the next update refreshes it.
+	SDKLockSHA                    string `json:"sdk_lock_sha,omitempty"`
+	ToolsSHA                      string `json:"tools_sha,omitempty"`
+	CodeGraphSHA                  string `json:"codegraph_sha,omitempty"`
+	Context7SHA                   string `json:"context7_sha,omitempty"`
+	PrefixIdentity, AgentIdentity string
+	GGA                           bool                  `json:"gga,omitempty"`
+	CodeGraph                     bool                  `json:"codegraph,omitempty"`
+	MainSDK                       *userSnapshotArtifact `json:"main_sdk,omitempty"`
+	Replaced                      string                `json:"replaced,omitempty"`
 	// RootRisk records that root published this installation with the explicit
 	// acceptance binding; older manifests simply omit the field.
 	RootRisk bool `json:"rootRisk,omitempty"`

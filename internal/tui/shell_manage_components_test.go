@@ -107,7 +107,7 @@ func confirmShellPlan(t *testing.T, m Model, requests <-chan shellinstaller.User
 	previous := shellRootRiskGate
 	t.Cleanup(func() { shellRootRiskGate = previous })
 	shellRootRiskGate = func() error { return nil }
-	assertViewContains(t, m.View(), "Installation plan", "1. Validate the selection and target", "5. Publish, verify and register the installation", "Enter: install • Esc: back")
+	assertViewContains(t, m.View(), "Installation plan", "1. Validate the selection and target", "Enter: install • Esc: back")
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.shellInstallRun == nil {
 		t.Fatalf("plan confirmation did not start the worker:\n%s", m.View())
@@ -175,7 +175,7 @@ func TestShellManageComponentDeltaAppliesThroughUpdateInstallation(t *testing.T)
 			view := m.View()
 			assertViewContains(t, view, "Manage installation", "COMPONENT CHANGES",
 				"  CodeGraph      "+tt.from+" → "+tt.to,
-				"Update installation reinstalls the stack with every selected change.",
+				"Update installation refreshes only the changed components; your configuration, logins and sessions are preserved.",
 				" ▸ Update installation", "   Back", "   Uninstall this installation")
 			assertViewOmits(t, view, "not applied here", "Apply preferences", "PREFERENCE CHANGES")
 			m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter}) // Update installation.
@@ -184,6 +184,9 @@ func TestShellManageComponentDeltaAppliesThroughUpdateInstallation(t *testing.T)
 			}
 			assertReconfigureRequest(t, m.shellPlanRequest, target, want)
 			assertReconfigureRequest(t, confirmShellPlan(t, m, requests), target, want)
+			if m.shellPlanRequest.Scope != "codegraph" {
+				t.Fatalf("component delta scope = %q, want \"codegraph\"", m.shellPlanRequest.Scope)
+			}
 		})
 	}
 }
