@@ -46,7 +46,7 @@ func shellExperienceCategories() []string {
 // selection and the detected Pi data.
 func ShellInstallTargetEntries(mode string, piFound bool, piNote string, agent string, existing []shellinstaller.UserShellInstall, locked bool) []ShellExperienceEntry {
 	_ = existing // Existing-install configuration is not a target choice.
-	agentDescription := "Install privately but reuse " + agent + " for settings and MCP; its prefix (for example Homebrew) is never written."
+	agentDescription := "Install privately but reuse " + agent + " for settings and MCP; its prefix (for example Homebrew) is never written. Pi's own fd/rg in its bin are set aside inside the installation and restored on uninstall."
 	if agent == "" {
 		agentDescription = "No Pi agent was detected; choose Separate install."
 		if piNote != "" && piNote != "missing" && piNote != "ambiguous" {

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -24,7 +23,22 @@ var (
 	shellInstallInspect = shellinstaller.InspectUserInstall
 	shellInstallEntry   = shellinstaller.RunUserEntry
 	shellLaunchProbe    = shellinstaller.RunUserLaunchProbe
+	// shellInlineDirect selects the Linux inline route: a no-new-privileges
+	// direct worker plus the delegated-unit launch probe.
+	shellInlineDirect = runtime.GOOS == "linux"
+	shellDirectWorker = runShellDirectWorker
 )
+
+// runShellDirectWorker runs the portable direct installer under setpriv. Its
+// environment is inherited: the host's registry, reconfigure and Main
+// fallback intents reach the worker unchanged.
+func runShellDirectWorker(ctx context.Context, self string, args []string, stdout, stderr io.Writer) error {
+	entry := append([]string{"--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--", self, "shell", "internal-install-direct"}, args...)
+	cmd := exec.CommandContext(ctx, "/usr/bin/setpriv", entry...)
+	cmd.Env = append(os.Environ(), "GENTLE_AI_SHELL_STEPS=1")
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	return cmd.Run()
+}
 
 // Platform contracts live in shell_install_platform_{windows,other}.go:
 // shellInstallHelp, shellInstallPlatformFlags, shellEntryValues,
@@ -155,7 +169,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 	if len(args) < 2 {
 		return errors.New("invalid or oversized experience selection; run gentle-ai shell install to review it again")
 	}
-	if runtime.GOOS != "linux" {
+	if !shellInlineDirect {
 		self, err := os.Executable()
 		if err != nil {
 			return err
@@ -178,46 +192,70 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 	if err != nil {
 		return err
 	}
+	// The direct installer never exercises the delegated unit every later
+	// launch uses (#5713). Probe that unit before any effect: a refusal then
+	// leaves no destination, launcher or registry entry to unwind.
+	if probeErr := shellLaunchProbe(ctx, self); probeErr != nil {
+		return preserveShellFailure(fmt.Errorf("installation refused before any change: the delegated unit launch probe failed: %w", probeErr))
+	}
 	workerLog := &boundedWorkerLog{limit: 8192}
-	entry := append([]string{"--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--", self, "shell", "internal-install-direct"}, args[1:]...)
-	cmd := exec.CommandContext(ctx, "/usr/bin/setpriv", entry...)
-	cmd.Env = append(os.Environ(), "GENTLE_AI_SHELL_STEPS=1")
-	cmd.Stderr = workerLog
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	scan := make(chan struct{})
-	go func() {
-		defer close(scan)
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := scanner.Text()
-			_, _ = workerLog.Write([]byte(line + "\n"))
-			if index, total, label, ok := shellStepLine(line); ok && report != nil {
-				report(shellinstaller.UserInstallProgress{Index: index, Total: total, Label: label, State: "done"})
-			} else if index, total, label, ok := shellDetailLine(line); ok && report != nil {
-				report(shellinstaller.UserInstallProgress{Index: index, Total: total, Label: label, State: "detail", Detail: label})
-			}
-		}
-	}()
-	waitErr := cmd.Wait()
-	<-scan
+	steps := &shellStepWriter{log: workerLog, report: report}
+	waitErr := shellDirectWorker(ctx, self, args[1:], steps, workerLog)
+	steps.flush()
 	if waitErr != nil {
 		if output := strings.TrimSpace(workerLog.String()); output != "" {
 			waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
 		}
 		return preserveShellFailure(waitErr)
 	}
-	// The direct installer never exercised the delegated unit path; refuse to
-	// claim success when the unit a later launch will use cannot run (#5713).
-	if probeErr := shellLaunchProbe(ctx, self); probeErr != nil {
-		return preserveShellFailure(fmt.Errorf("published installation refused: the delegated unit launch probe failed: %w", probeErr))
+	return nil
+}
+
+// shellStepWriter turns the direct worker's ordered step and detail lines into
+// progress reports; every line is also kept in the bounded worker log.
+type shellStepWriter struct {
+	log    *boundedWorkerLog
+	report func(shellinstaller.UserInstallProgress)
+	buffer []byte
+}
+
+const shellStepLineLimit = 64 << 10
+
+func (w *shellStepWriter) Write(p []byte) (int, error) {
+	w.buffer = append(w.buffer, p...)
+	for {
+		index := bytes.IndexByte(w.buffer, '\n')
+		if index < 0 {
+			break
+		}
+		w.observe(string(w.buffer[:index]))
+		w.buffer = w.buffer[index+1:]
 	}
-	return preserveShellFailure(nil)
+	if len(w.buffer) > shellStepLineLimit {
+		// An unterminated oversized line is never a marker; keep its tail only.
+		_, _ = w.log.Write(w.buffer)
+		w.buffer = nil
+	}
+	return len(p), nil
+}
+
+func (w *shellStepWriter) flush() {
+	if len(w.buffer) > 0 {
+		w.observe(string(w.buffer))
+		w.buffer = nil
+	}
+}
+
+func (w *shellStepWriter) observe(line string) {
+	_, _ = w.log.Write([]byte(line + "\n"))
+	if w.report == nil {
+		return
+	}
+	if index, total, label, ok := shellStepLine(line); ok {
+		w.report(shellinstaller.UserInstallProgress{Index: index, Total: total, Label: label, State: "done"})
+	} else if index, total, label, ok := shellDetailLine(line); ok {
+		w.report(shellinstaller.UserInstallProgress{Index: index, Total: total, Label: label, State: "detail", Detail: label})
+	}
 }
 
 type boundedWorkerLog struct {

@@ -24,6 +24,10 @@ func shellWelcomeExperience() shellinstaller.UserExperience {
 	})
 }
 
+// errShellAgentCodeGraph names why the agent target never offers CodeGraph ON:
+// the CodeGraph library stages only into a Separate (or Shared) install.
+var errShellAgentCodeGraph = errors.New("CodeGraph needs a Separate install; it stays off for On my existing Pi")
+
 // shellForceGGAOff retires GGA on any constructed or loaded shell experience:
 // old installations, manifests or environments can never re-enable it here.
 func shellForceGGAOff(profile shellinstaller.UserExperience) shellinstaller.UserExperience {
@@ -201,6 +205,9 @@ func (m Model) configureShellExperience(msg tea.Msg) (tea.Model, tea.Cmd) {
 					config.err = errors.New("No Pi agent was detected; choose Separate install")
 				} else {
 					config.mode, config.choice, config.prefix = "agent", "agent", ""
+					if config.profile.CodeGraph == "on" {
+						config.profile.CodeGraph, config.err = "off", errShellAgentCodeGraph
+					}
 				}
 			} else if entry.Choice == "existing" && len(config.existing) == 1 {
 				install := config.existing[0]
@@ -229,6 +236,9 @@ func (m Model) configureShellExperience(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// GGA is retired; force it inert before any plan or manage handoff.
 			config.profile = shellForceGGAOff(config.profile)
 			config.err = config.profile.Validate()
+			if config.err == nil && config.mode == "agent" && config.profile.CodeGraph == "on" {
+				config.err = errShellAgentCodeGraph
+			}
 			if config.err == nil && config.profile.SDKSource == "main-preview" {
 				config.err = shellMainSDKChoiceError(config.profile)
 			}
@@ -286,7 +296,10 @@ func (m Model) configureShellExperience(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			fields := []*string{&config.profile.StrictTDD, &config.profile.GlobalRDD, &config.profile.CodeGraph, &config.profile.Context7}
 			field := fields[entry.Control-screens.ShellExperienceTDD]
-			if *field == "on" {
+			if entry.Control == screens.ShellExperienceCodeGraph && config.mode == "agent" && *field != "on" {
+				// The agent target has no CodeGraph producer; never offer ON.
+				config.err = errShellAgentCodeGraph
+			} else if *field == "on" {
 				*field = "off"
 			} else {
 				*field = "on"
@@ -375,6 +388,9 @@ func (m Model) shellInstallView() string {
 		}
 		return screens.RenderShellInstall(steps, failure, m.shellInstallRun.done, m.shellInstallRun.spinner, m.shellInstallRun.bloom, published, m.shellInstallRun.fallbackAvailable, m.shellInstallSelection.Request.Mode, launch, m.Width, m.Height)
 	}
+	if m.shellRootRisk != nil {
+		return screens.RenderShellRootRisk(m.shellRootRisk.input, m.Width, m.Height)
+	}
 	if m.shellPlan != nil {
 		return screens.RenderShellPlan(m.shellPlan, m.Width, m.Height)
 	}
@@ -450,8 +466,14 @@ func shellMainPlatformError() error {
 	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		return nil
 	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		return nil
+	}
 	if runtime.GOOS == "windows" {
 		return nil
+	}
+	if runtime.GOOS == "darwin" {
+		return errors.New("Main preview is qualified on macOS arm64 only; choose Stable to install")
 	}
 	return errors.New("SDK Main + stock provider is qualified on Linux amd64 today; macOS support is being completed")
 }

@@ -4,10 +4,12 @@ Pure file parsing with the standard library (no YAML package), so it runs on
 Linux and macOS alike: `python3 -I e2e/shell-macos-ci-contract.test.py`.
 """
 import ast
+import os
 import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -17,6 +19,7 @@ PINS = ROOT / 'internal/shellinstaller/user_pins_darwin.go'
 REQUIRED_PATHS = [
     'internal/shellinstaller/**',
     'internal/cli/shell_install*',
+    'internal/tui/**',
     'scripts/bootstrap-gentle-shell-private-node.sh',
     'scripts/provision-gentle-shell-private-global.mjs',
     'scripts/runtime_helpers.go',
@@ -146,6 +149,7 @@ class MacOSQualificationContract(unittest.TestCase):
         order = []
         for marker in ['go test ./internal/shellinstaller ./scripts -count=1',
                        'go test ./internal/cli -run Shell -count=1',
+                       'go test ./internal/tui/... -count=1',
                        'go build -mod=readonly -o "$RUNNER_TEMP/candidate/gentle-ai" ./cmd/gentle-ai',
                        'e2e/shell-macos-qualification.py']:
             order.append(next(index for index, run in enumerate(runs) if marker in run))
@@ -172,6 +176,58 @@ class MacOSQualificationContract(unittest.TestCase):
         self.assertLessEqual(whole + DEADLINE_MARGIN_SECONDS, step * 60)
         for name in ['INSPECT_SECONDS', 'INSTALL_SECONDS', 'RECOVER_SECONDS', 'PROBE_SECONDS']:
             self.assertLess(constants[name], whole, name)
+
+    def test_residue_admits_only_the_separate_launcher(self):
+        tree, _ = script_constants()
+        wanted = {'QualificationError', 'require', 'home_launcher'}
+        nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted]
+        self.assertEqual({node.name for node in nodes}, wanted)
+        namespace = {'os': os}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SCRIPT), 'exec'), namespace)
+        home_launcher, failure = namespace['home_launcher'], namespace['QualificationError']
+        self.assertIn('launcher = home_launcher(context.home, separate)', SCRIPT.read_text())
+        with tempfile.TemporaryDirectory() as root:
+            home, separate = os.path.join(root, 'home'), os.path.join(root, 'separate')
+            os.makedirs(os.path.join(separate, 'bin'))
+            binding = os.path.join(os.path.realpath(separate), 'bin/gentle-shell')
+            with open(binding, 'w') as handle:
+                handle.write('binding\n')
+            os.chmod(binding, 0o700)
+            os.makedirs(home)
+            with self.assertRaises(failure):
+                home_launcher(home, separate)  # The launcher is required, not optional.
+            os.makedirs(os.path.join(home, '.local/bin'))
+            link = os.path.join(home, '.local/bin/gentle-shell')
+            os.symlink(binding, link)
+            with self.assertRaises(failure):
+                home_launcher(home, separate)  # Without SHELL, ~/.profile carries the PATH line.
+            profile = os.path.join(home, '.profile')
+            line = 'export PATH="$HOME/.local/bin:$PATH" # gentle-ai: gentle-shell launcher\n'
+            for wrong in ['', line + line, '# mine\n' + line, line.rstrip('\n')]:
+                with open(profile, 'w') as handle:
+                    handle.write(wrong)
+                with self.assertRaises(failure):
+                    home_launcher(home, separate)  # Exactly our one marked line, nothing else.
+            with open(profile, 'w') as handle:
+                handle.write(line)
+            self.assertEqual(home_launcher(home, separate), ['.local/bin/gentle-shell'])
+            gs = os.path.join(home, '.local/bin/gs')
+            os.symlink(binding, gs)  # `gs` is published unless the name is occupied.
+            self.assertEqual(home_launcher(home, separate), ['.local/bin/gentle-shell', '.local/bin/gs'])
+            os.unlink(gs)
+            os.symlink(os.path.join(root, 'elsewhere'), gs)
+            with self.assertRaises(failure):
+                home_launcher(home, separate)
+            os.unlink(gs)
+            with open(os.path.join(home, '.npmrc'), 'w') as handle:
+                handle.write('residue\n')
+            with self.assertRaises(failure):
+                home_launcher(home, separate)
+            os.unlink(os.path.join(home, '.npmrc'))
+            os.unlink(link)
+            os.symlink(os.path.join(root, 'elsewhere'), link)
+            with self.assertRaises(failure):
+                home_launcher(home, separate)
 
     def test_receipt_artifact_is_uploaded_even_after_failure(self):
         upload = next(step for step in self.steps if step['uses'] and step['uses'].startswith('actions/upload-artifact@'))

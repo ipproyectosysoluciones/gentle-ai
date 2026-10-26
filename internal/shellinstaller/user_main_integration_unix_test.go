@@ -90,7 +90,7 @@ func TestUserMainIntegrationStagesOriginalCompleteProfile(t *testing.T) {
 			before := profile
 			root := installStagePath(t)
 			err := userPrepareInstallStage(context.Background(), root, "separate", &profile)
-			if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+			if !(runtime.GOOS == "linux" && runtime.GOARCH == "amd64") && !(runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") {
 				if err == nil {
 					t.Fatal("unqualified Main stage admitted")
 				}

@@ -20,11 +20,12 @@ import (
 // and the supervisor stay untouched. Seams keep the overlay testable
 // in-process: fixture trees carry no real supplier archives and never execute
 // Node. Production values are the complete verifier, the owned provisioner and
-// the canonical Main acquisition.
+// the canonical Main acquisition and the exclusive authority writer.
 var (
 	userWindowsOverlayVerify       = userWindowsVerify
 	userWindowsOverlayProvision    = userWindowsProvision
 	userWindowsOverlayMainSnapshot = userWindowsMainSnapshot
+	userWindowsOverlayWrite        = userWindowsWrite
 )
 
 // userWindowsOverlayStockName is the tree-root sibling that retains the stock
@@ -148,7 +149,7 @@ func userWindowsChannelOverlay(ctx context.Context, req UserInstallRequest) (res
 	if cleanup != nil {
 		cleanup()
 	}
-	return UserInstallResult{root, filepath.Join(root, "prefix"), filepath.Join(root, "agent"), "channel-overlay"}, true, nil
+	return UserInstallResult{root, filepath.Join(root, "prefix"), filepath.Join(root, "agent"), "channel-overlay", ""}, true, nil
 }
 
 // userWindowsOverlayToMain swaps the installed Stable SDK for a freshly
@@ -201,22 +202,23 @@ func userWindowsOverlayToMain(ctx context.Context, root string, rollback *userWi
 		rollback.push(func() error { return os.Rename(target, original) })
 	}
 	// Inert Main authority: the manifest names nothing yet, so these writes
-	// change no verification outcome until the authority rebind below.
+	// change no verification outcome until the authority rebind below. Each
+	// undo is registered before its exclusive write (both paths were proven
+	// absent above), so a failed or partial write never outlives the unwind.
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
 		return userWindowsArtifact{}, err
 	}
-	if err := userWindowsWrite(filepath.Join(root, "main.json"), encoded); err != nil {
-		return userWindowsArtifact{}, err
+	for _, file := range []struct {
+		path string
+		data []byte
+	}{{filepath.Join(root, "main.json"), encoded}, {filepath.Join(root, "runtime", "archives", "main.zip"), data}} {
+		path := file.path
+		rollback.push(func() error { return userWindowsOverlayRemoveIfPresent(path) })
+		if err := userWindowsOverlayWrite(path, file.data); err != nil {
+			return userWindowsArtifact{}, err
+		}
 	}
-	if err := userWindowsWrite(filepath.Join(root, "runtime", "archives", "main.zip"), data); err != nil {
-		return userWindowsArtifact{}, err
-	}
-	rollback.push(func() error {
-		return errors.Join(
-			os.Remove(filepath.Join(root, "main.json")),
-			os.Remove(filepath.Join(root, "runtime", "archives", "main.zip")))
-	})
 	if err := userWindowsCompareMain(ctx, data, snapshot, gentle); err != nil {
 		return userWindowsArtifact{}, err
 	}

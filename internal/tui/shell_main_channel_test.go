@@ -27,7 +27,7 @@ func focusMainPreview(t *testing.T, m Model) (Model, int) {
 
 func openAgreedConfiguration(t *testing.T) Model {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shellTestHome(t))
 	m := NewModel(system.DetectionResult{}, "main-preview-test").WithShellInstaller()
 	m.Width, m.Height = 209, 61
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -41,6 +41,7 @@ func openAgreedConfiguration(t *testing.T) Model {
 // The channel radio is a channel, not a preference consumer: explicit ON/OFF
 // values must not lock it. Unsupported pairings are named when continuing.
 func TestShellMainChannelIsSelectable(t *testing.T) {
+	skipUnqualifiedMainPreview(t)
 	stubShellKernelGate(t)
 	m := openAgreedConfiguration(t)
 	m, _ = focusMainPreview(t, m)
@@ -70,6 +71,7 @@ func TestShellMainChannelIsSelectable(t *testing.T) {
 }
 
 func TestShellMainAcceptsQualifiedSelections(t *testing.T) {
+	skipUnqualifiedMainPreview(t)
 	stubShellKernelGate(t)
 	m := openAgreedConfiguration(t)
 	m, _ = focusMainPreview(t, m)

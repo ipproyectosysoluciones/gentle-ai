@@ -43,12 +43,14 @@ The shared Unix flow already uses these files; there is no second macOS installe
 - `GOOS=darwin GOARCH=arm64 go build ./...` passes on Linux.
 - `GOOS=darwin GOARCH=amd64 go build ./...` is not a supported product target; the kernel guard rejects it at runtime.
 - Linux TUI/screens/shellinstaller tests pass at this head (some environment-sensitive tests need `umask 022`).
-- No native macOS end-to-end installation has been executed by the Windows/Linux work.
+- Native macOS 26 arm64 acceptance of the main TUI passed (non-root, isolated HOME): Separate on Stable with Gentleman, Background/Strict TDD/Global RDD/Context7 ON and CodeGraph OFF; canonical preference files, `~/.local/bin/gentle-shell`, `gentle-shell --version`; Manage → Apply preferences (Neutral, Strict TDD OFF, Context7 OFF) with schema'd bytes and the Context7 `url`/`exposure` kept; uninstall with backup and launcher removal.
+- `go test ./internal/shellinstaller/... ./internal/tui/...` passes natively on macOS; the "Gentle Shell macOS qualification" lane runs both packages.
 - `Darwin Runtime` CI exists (`macos-latest`) but runs only `scripts/darwin-release-blockers.manifest`; **it currently contains no shellinstaller test entries**.
+- Still refused on macOS: CodeGraph ON (no darwin archives/staging) and Main preview (no darwin native runtime or channel overlay).
 
 ## Priority tasks
 
-1. **Fix the Darwin test-build gap.** `GOOS=darwin go vet ./internal/shellinstaller` currently fails because `writeInstallFixture` is defined in `user_shell_reconfigure_unix_test.go` under `//go:build linux && amd64`, while `user_shell_apply_unix_test.go` is `linux || darwin`. Move the helper to a shared `linux || darwin` test file or add a Darwin equivalent. Then run the shared shell installer tests natively on macOS.
+1. **Done: fix the Darwin test-build gap.** `GOOS=darwin go vet ./internal/shellinstaller` currently fails because `writeInstallFixture` is defined in `user_shell_reconfigure_unix_test.go` under `//go:build linux && amd64`, while `user_shell_apply_unix_test.go` is `linux || darwin`. Move the helper to a shared `linux || darwin` test file or add a Darwin equivalent. Then run the shared shell installer tests natively on macOS.
 
 2. **Add shell-installer coverage to Darwin CI.** Add the relevant native tests to `scripts/darwin-release-blockers.manifest` (or a dedicated macOS shell job), including at minimum:
    - install inspection/selection and no-effect validation,
@@ -59,7 +61,7 @@ The shared Unix flow already uses these files; there is no second macOS installe
    - launch from the installed target.
    The manifest runner's drift guard is deliberate; add real test names, not broad regexes.
 
-3. **Run a real macOS acceptance pass.** On macOS 14+ Apple Silicon, as a non-root user:
+3. **Partly done: run a real macOS acceptance pass.** Install, Manage apply and uninstall passed (see Verified state); Stable ↔ Main waits for the darwin Main runtime, and reinstall/cache lifecycle is not yet re-run. On macOS 14+ Apple Silicon, as a non-root user:
    - Build the TUI from this branch: `go build -o /tmp/gentle-ai ./cmd/gentle-ai`.
    - Run it, choose **Install → Separate**, confirm all five steps and the completion screen.
    - Verify `~/.local/bin/gentle-shell` and the installed target.

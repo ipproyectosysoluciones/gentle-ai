@@ -10,7 +10,7 @@ import (
 )
 
 func TestShellOriginalWelcomeAndMenu(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shellTestHome(t))
 	const title = "Install Gentle-Shell, our own agent"
 
 	t.Run("campaign is initially selected above the ordinary menu", func(t *testing.T) {

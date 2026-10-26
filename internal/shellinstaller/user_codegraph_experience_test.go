@@ -1,6 +1,7 @@
 package shellinstaller
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -88,8 +89,13 @@ func TestUserCodeGraphExperienceHistoricalAndRefusal(t *testing.T) {
 		if err := userExperienceSupported(&profile); err != nil {
 			t.Fatalf("qualified Main CodeGraph was refused: %v", err)
 		}
-		if files, err := userStageExperienceFiles(&profile); err == nil || files != nil || !strings.Contains(err.Error(), "Main SDK") {
-			t.Fatal("generic/Windows stage silently accepted CodeGraph", files, err)
+		files, err := userStageExperienceFiles(&profile)
+		if runtime.GOOS == "windows" {
+			// The Windows installer stages the Main channel natively (#5644);
+			// CodeGraph is a runtime, so only the base preference file is staged.
+			assertStagedExperienceFiles(t, files, err, "background-subagents.json")
+		} else if err == nil || files != nil || !strings.Contains(err.Error(), "Main SDK") {
+			t.Fatal("generic stage silently accepted CodeGraph", files, err)
 		}
 		bounded := raw + strings.Repeat(" ", 256-len(raw))
 		if _, err := DecodeUserExperience(bounded); err != nil {
@@ -101,5 +107,19 @@ func TestUserCodeGraphExperienceHistoricalAndRefusal(t *testing.T) {
 	}
 	if files, err := userStageExperienceFiles(nil); err != nil || files != nil {
 		t.Fatal("nil profile changed", files, err)
+	}
+}
+
+// assertStagedExperienceFiles requires the exact config file names, in order,
+// that the stage writer produces for an admitted profile.
+func assertStagedExperienceFiles(t *testing.T, files []userExperienceStageFile, err error, want ...string) {
+	t.Helper()
+	if err != nil || len(files) != len(want) {
+		t.Fatalf("admitted stage differs: files=%v err=%v want=%v", files, err, want)
+	}
+	for index, file := range files {
+		if file.name != want[index] || len(file.data) == 0 {
+			t.Fatalf("staged file %d differs: %q (%d bytes), want %q", index, file.name, len(file.data), want[index])
+		}
 	}
 }

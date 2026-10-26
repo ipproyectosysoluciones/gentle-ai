@@ -214,6 +214,16 @@ func TestPrivateCgroupMapping(t *testing.T) {
 		{"subtree root", "0::/tenant\n", submount, "/sys/fs/cgroup"},
 		{"decoded root", "0::/tenant space/child\n", strings.Replace(mount, "0:1 / ", `0:1 /tenant\040space `, 1), "/sys/fs/cgroup/child"},
 		{"optional fields", "0::/child\n", strings.Replace(mount, " ro - ", " ro shared:2 master:1 - ", 1), "/sys/fs/cgroup/child"},
+		// snapd-desktop-integration adds an nsfs mount whose root field is a
+		// namespace identifier, not a path. It is present on every stock Ubuntu
+		// GNOME desktop (#5733) and must not fail the hierarchy resolution.
+		{"unrelated nsfs mount", "0::/child\n", mount + "36 26 0:41 mnt:[4026532518] /run/snapd/ns/snapd-desktop-integration.mnt nsfs rw - nsfs nsfs rw\n", "/sys/fs/cgroup/child"},
+		// Roots of non-cgroup2 mounts are never consumed, so even hostile
+		// values there cannot affect the resolution.
+		{"unrelated noncanonical root", "0::/child\n", mount + "36 26 0:41 /tenant/../ /opt nsfs rw - nsfs nsfs rw\n", "/sys/fs/cgroup/child"},
+		// A mountpoint that is not canonical cannot be classified against the
+		// trusted hierarchy, so it still refuses.
+		{"unrelated noncanonical mountpoint", "0::/\n", mount + "36 26 0:41 / /opt/../evil ro - tmpfs tmpfs rw\n", ""},
 		{"literal space", "0::/child space\n", mount, "/sys/fs/cgroup/child space"},
 		{"invalid UTF-8", "0::/child\xff\n", mount, ""},
 		{"missing membership", "", mount, ""},

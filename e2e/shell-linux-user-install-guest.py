@@ -860,6 +860,47 @@ def alan_pnpm_backend_probe():
     REPORT['alanBackendProbe'] = {'pnpm': version, 'stockUpgrade': '0.99.2 to 1.0.0', 'modernCohortPin': 'pi-coding-agent 1.3.0', 'stockForce': True, 'modernCohort': 'acquired compiled modern frozen roots', 'independentlyPinnedRoots': len(pins), 'functionalReady': False}
 
 
+PATH_LINE = b'export PATH="$HOME/.local/bin:$PATH" # gentle-ai: gentle-shell launcher\n'
+
+
+def home_preservation_violations(before_entries, after_entries, original_profile, target):
+    """Compare HOME physical_inventory rows across a Separate install.
+
+    The install publishes ~/.local/bin/gentle-shell and ~/.local/bin/gs as
+    links to the target's bin/gentle-shell. run() gives the installer a PATH
+    without ~/.local/bin and no SHELL, so ~/.profile gains exactly the marked
+    PATH line after its original bytes. Only the HOME directory times and the
+    size and times of ~/.profile may change with that; every other row,
+    including .bashrc and .zshrc, stays identical. Empty means preserved.
+    """
+    launcher = str(target / 'bin/gentle-shell')
+    added = {'.local': None, '.local/bin': None, '.local/bin/gentle-shell': launcher, '.local/bin/gs': launcher}
+    before = {(row[0], row[1]): row[2:] for row in before_entries}
+    after = {(row[0], row[1]): row[2:] for row in after_entries}
+    violations = []
+    for key in sorted(set(before) | set(after)):
+        old, new = before.get(key), after.get(key)
+        if old is None and key[0] in added:
+            if key[1] == 'link' and new != (added[key[0]],):
+                violations.append((key[0], 'link', 'launcher does not link to the target'))
+            continue
+        if key == ('.profile', 'file'):
+            if new != (hashlib.sha256(original_profile + PATH_LINE).hexdigest(),):
+                violations.append((key[0], 'file', 'does not hold its original bytes plus exactly the marked PATH line'))
+            continue
+        if key[1] == 'metadata' and key[0] in {'.', '.profile'} and old is not None and new is not None:
+            # mode, uid, gid, dev and inode stay; size and times may move.
+            if old[:5] != new[:5]:
+                violations.append((key[0], 'metadata', 'identity or mode changed'))
+            continue
+        if old != new:
+            violations.append((key[0], key[1], 'changed'))
+    required = {'.local/bin/gentle-shell', '.profile'}
+    missing = sorted(name for name in required if (name, 'metadata') not in after)
+    violations.extend((name, 'metadata', 'missing') for name in missing)
+    return violations
+
+
 def mvp_smoke(personal):
     source = os.environ.get('GENTLE_GUEST_SOURCE_SHA', '')
     require(len(source) == 40 and all(c in '0123456789abcdef' for c in source), 'exact candidate source revision missing')
@@ -870,8 +911,9 @@ def mvp_smoke(personal):
     (personal_agent / 'settings.json').write_text('{"theme":"personal-preserved","packages":[]}\n')
     for name in ['.bashrc', '.profile', '.zshrc']:
         (WORK / 'home' / name).write_text('# personal shell configuration must remain unchanged\n')
-    protected = [personal, WORK / 'home']
-    before = [physical_inventory(root) for root in protected]
+    original_profile = (WORK / 'home/.profile').read_bytes()
+    home_before = []
+    before = [physical_inventory(personal), physical_inventory(WORK / 'home', home_before)]
     target = WORK / 'parents/mvp-separate'
     require(not target.exists(), 'smoke target is not cold')
     manifest = install(target)
@@ -885,7 +927,11 @@ def mvp_smoke(personal):
     pty_status(pathlib.Path(SUPERVISOR), WORK / 'project', [SUPERVISOR, 'shell', 'install'], installer=target)
     for name in ['gentle-shell', 'pi']:
         pty_status(target / 'bin' / name, WORK / 'project', opening_only=True)
-    require(before == [physical_inventory(root) for root in protected], 'personal Pi, agent or shell configuration changed')
+    home_after = []
+    require(before[0] == physical_inventory(personal), 'personal Pi changed')
+    physical_inventory(WORK / 'home', home_after)
+    home_changes = home_preservation_violations(home_before, home_after, original_profile, target)
+    require(not home_changes, 'personal agent or shell configuration changed beyond the launchers and PATH line: %s' % home_changes[:8])
     require((WORK / 'gofmt.data').is_file() and (WORK / 'gofmt.data').stat().st_size == 0, 'candidate source formatting differs')
     REPORT.update(functionalReady=False, mvpSmoke={'outcome': 'PASS', 'sourceSHA': source, 'pi': '1.3.0', 'gentle': '4.3.0', 'native': '4.2.0', 'personalPiAndShellPreserved': True, 'coldInstallerTUI': 'deferred', 'fullJourney': 'deferred'})
 

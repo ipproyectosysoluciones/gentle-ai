@@ -24,7 +24,8 @@ func TestShellExperienceSDKSourceHandoff(t *testing.T) {
 	}
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyDown})
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+	// Main is offered on Linux amd64, macOS arm64 and Windows (shellMainPlatformError).
+	if !(runtime.GOOS == "linux" && runtime.GOARCH == "amd64") && !(runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") && runtime.GOOS != "windows" {
 		if m.shellExperience.profile.SDKSource != "stable" || m.shellExperience.err == nil {
 			t.Fatal("unqualified Main choice offered")
 		}
@@ -40,6 +41,7 @@ func TestShellExperienceSDKSourceHandoff(t *testing.T) {
 	if m.ShellInstallSelection().Confirmed {
 		t.Fatal("plan inspection forged consent")
 	}
+	shellAssertPlatformWorkerHandoff(t, request)
 	back := experienceKey(m, tea.KeyMsg{Type: tea.KeyEsc})
 	if back.shellExperience == nil {
 		t.Fatal("plan escape lost Configure")
@@ -51,7 +53,12 @@ func TestShellExperienceSDKSourceHandoff(t *testing.T) {
 		t.Fatal("SDK edit retained the old inspection or source")
 	}
 	args := cli.ShellInstallArguments(cli.ShellInstallSelection{Request: second, Confirmed: true})
-	if len(args) != 8 || args[6] != "--experience" {
+	// install + five positional values (+ --channel CHANNEL on Windows) + --experience PROFILE.
+	wantArgs := 8
+	if runtime.GOOS == "windows" {
+		wantArgs = 10
+	}
+	if len(args) != wantArgs || args[wantArgs-2] != "--experience" {
 		t.Fatal("Main consent changed positional worker ABI", args)
 	}
 	req, err := shellinstaller.UserInstallFromEntry(args[1:])

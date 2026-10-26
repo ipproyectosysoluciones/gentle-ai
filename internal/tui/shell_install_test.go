@@ -1,18 +1,21 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestShellInstallerWelcomeOptIn(t *testing.T) {
 	stubShellKernelGate(t)
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shellTestHome(t))
 	ordinary := NewModel(system.DetectionResult{}, "dev")
 	ordinary.Width, ordinary.Height = 80, 30
 	if ordinary.optionCount() != 12 || strings.Contains(ordinary.View(), "Install Gentle-Shell, our own agent") {
@@ -32,6 +35,7 @@ func TestShellInstallerWelcomeOptIn(t *testing.T) {
 	if m.Screen != ScreenShellInstall || cmd != nil || !strings.Contains(m.View(), "Configure Gentle-Shell experience") {
 		t.Fatal("welcome starts a program or fails to enter the selector")
 	}
+	m = shellHostCodeGraph(t, m)
 	final, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = final.(Model)
 	final, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -93,5 +97,48 @@ func TestShellInstallerQuitKeepsOrdinaryBehavior(t *testing.T) {
 		if _, ok := cmd().(tea.QuitMsg); !ok {
 			t.Fatal("Quit selects a different action")
 		}
+	}
+}
+
+// A refusal that arrives after the worker reported every step (the result is
+// verified after publication) must never render as a complete 5/5 run.
+func TestShellInstallRefusalAfterFinalStepIsNotShownComplete(t *testing.T) {
+	stubShellKernelGate(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	m := NewModel(system.DetectionResult{}, "dev").WithShellInstaller()
+	m.Width, m.Height = 120, 40
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.Screen != ScreenShellInstall {
+		t.Fatalf("welcome did not open the installer: %v", m.Screen)
+	}
+	m = m.WithShellInstallRunner(func(_ context.Context, _ shellinstaller.UserInstallRequest, report func(shellinstaller.UserInstallProgress)) error {
+		for index, label := range shellInstallStepLabels {
+			report(shellinstaller.UserInstallProgress{Index: index + 1, Total: len(shellInstallStepLabels), Label: label, State: "running"})
+			report(shellinstaller.UserInstallProgress{Index: index + 1, Total: len(shellInstallStepLabels), Label: label, State: "done"})
+		}
+		return errors.New("published result refused: verification failed after the final step")
+	})
+	request := shellinstaller.UserInstallRequest{Destination: filepath.Join(home, "missing-install"), Mode: "separate", Confirmation: "token"}
+	next, cmd := m.launchShellInstall(request, false)
+	m = next.(Model)
+	for cmd != nil && !m.shellInstallRun.done {
+		next, cmd = m.Update(cmd())
+		m = next.(Model)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Installation failed") || !strings.Contains(view, "verification failed after the final step") {
+		t.Fatalf("refusal is not reported:\n%s", view)
+	}
+	if strings.Contains(view, "5/5") || !strings.Contains(view, "4/5") {
+		t.Fatalf("failed run renders every step complete:\n%s", view)
+	}
+	last := shellInstallStepLabels[len(shellInstallStepLabels)-1]
+	if !strings.Contains(view, "[!] "+last) || !strings.Contains(view, "failed") {
+		t.Fatalf("the refused final step is not marked failed:\n%s", view)
+	}
+	if strings.Contains(view, "Welcome to the gentle-tailored experience") {
+		t.Fatalf("failed run shows the completion copy:\n%s", view)
 	}
 }

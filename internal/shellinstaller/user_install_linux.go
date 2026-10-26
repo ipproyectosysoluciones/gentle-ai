@@ -237,6 +237,9 @@ func userServiceWithPlan(ctx context.Context, self string, args []string, stdin 
 	}()
 	env = append(env, "GENTLE_SHELL_UNIT="+unit, "GENTLE_SHELL_UNIT_RECEIPT="+filepath.Join(receiptDir, "kernel.json"))
 	env = append(env, userProgressEnvironment(ctx)...)
+	// The unit sees only this list: forward the registry, reconfigure and
+	// Main fallback intents explicitly or the worker silently loses them.
+	env = append(env, userServiceIntentEnvironment(os.Getenv("HOME"))...)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -441,7 +444,14 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		}
 		result, err := RunUserInstallDirect(ctx, req)
 		if err == nil {
-			_, err = fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", result.Destination, result.Destination, result.Destination)
+			if _, err = fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", result.Destination, result.Destination, result.Destination); err != nil {
+				return err
+			}
+			if result.LauncherNote != "" {
+				if _, err = fmt.Fprintf(stdout, "%s\n", result.LauncherNote); err != nil {
+					return err
+				}
+			}
 		}
 		return err
 	}
@@ -491,7 +501,14 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		}
 		result, err := RunUserInstall(ctx, req)
 		if err == nil {
-			_, err = fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", result.Destination, result.Destination, result.Destination)
+			if _, err = fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", result.Destination, result.Destination, result.Destination); err != nil {
+				return err
+			}
+			if result.LauncherNote != "" {
+				if _, err = fmt.Fprintf(stdout, "%s\n", result.LauncherNote); err != nil {
+					return err
+				}
+			}
 		}
 		return err
 	case "native-coordinate":

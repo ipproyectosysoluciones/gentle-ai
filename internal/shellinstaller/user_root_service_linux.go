@@ -92,6 +92,9 @@ func rootSystemService(ctx context.Context, self string, args []string, stdin io
 	}()
 	env = append(env, "GENTLE_SHELL_UNIT="+unit, "GENTLE_SHELL_UNIT_RECEIPT="+filepath.Join(receiptDir, "kernel.json"))
 	env = append(env, userProgressEnvironment(ctx)...)
+	// The unit's PATH is the fixed system one: the launcher step needs the
+	// caller terminal's decision, never its PATH.
+	env = append(env, userLauncherIntentEnvironment(os.Getenv("HOME"))...)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err

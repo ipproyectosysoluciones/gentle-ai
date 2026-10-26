@@ -36,6 +36,8 @@ Fresh private-stage creation and preferences are now composed by the installatio
 
 Persona/background serialization now has one side-effect-free canonical codec consumed by the POSIX writer. Native custody, exclusive writes and staged readback remain in that writer; Windows non-nil profiles stay refused and no Windows guest qualification is admitted.
 
+Manage on a detected installation splits the selected delta: preference-only changes use **Apply preferences** in place; a component change (CodeGraph, or any change on an **On my existing Pi** install) offers **Update installation**, which reinstalls the target with the selected profile, including the preference changes of the same summary. **On my existing Pi** never offers CodeGraph ON: the CodeGraph library stages only into a Separate or Shared install.
+
 The confirmation review wraps to terminal width. Use PgUp/PgDn to scroll and Home/End to reach the first/last page, including the full Shared settings preview and recovery warnings; scrolling or resizing does not confirm or change your selection.
 
 For command-line installation, inspect, then use the **exact fresh printed confirmation** for that unchanged selection:
@@ -47,7 +49,9 @@ gentle-ai shell install --target /owned/private-parent/shell --mode separate --c
 
 For Shared, use `--mode shared` and supply `--prefix /owned/selected-prefix --agent /owned/selected-agent` on **both** calls. Do not reuse consent after changing paths or selected contents.
 
-Launch `TARGET/bin/gentle-shell` or `TARGET/bin/pi`. Normal launches have no installer menu; `TARGET/bin/gentle-shell install` reopens it. The installer does not modify PATH or shell files, replace an unrelated `pi`, or require a root installation.
+Launch `TARGET/bin/gentle-shell` or `TARGET/bin/pi`. Normal launches have no installer menu; `TARGET/bin/gentle-shell install` reopens it. Separate publishes `~/.local/bin/gentle-shell` and `~/.local/bin/gs`. When `~/.local/bin` is not on the PATH of the terminal that started the install, it appends one marked line, `export PATH="$HOME/.local/bin:$PATH" # gentle-ai: gentle-shell launcher`, to the startup file your shell reads for new terminals: `$ZDOTDIR/.zshrc` (or `~/.zshrc`) for zsh, `~/.bashrc` for bash, `conf.d/gentle-ai-shell.fish` (the same line in fish syntax) for fish, and `~/.profile` otherwise. It never writes through a symlink, never adds the line twice, and prints the line to add by hand when it may not edit that file. Uninstall removes exactly that line and deletes the file only when nothing at all is left in it (0 bytes). The installer does not otherwise modify PATH or shell files, replace an unrelated `pi`, or require a root installation.
+
+The installer TUI runs the portable direct worker, so it first probes the delegated systemd unit every later launch uses. When that probe fails (for example no `XDG_RUNTIME_DIR=/run/user/UID` or no user manager), the install is refused **before any change**: no target, launcher or registry entry is created. A published installation is recorded in `~/.gentle-ai/shell-installs.json` (0600) for Manage. That directory may be gentle-ai's usual `0755` state directory, but it must be owned by you, not a symlink, and not writable by group or others. If the installation cannot be recorded, the completion output says so; the installation itself is kept.
 
 ## Shared settings: preview before confirming
 
@@ -61,6 +65,40 @@ Inspect prints the selected agent's `settings.json` path and **only** its `packa
 `TARGET` and `PREFIX` above stand for your selected absolute paths, not literal settings values. The command uses pinned Node/npm. Other settings keys and existing package entries are preserved; foreign npm overrides or Gentle declarations refuse. Preview is disclosure, not authority or a backup; confirm only the exact fresh inspected selection.
 
 Shared also writes **two new files** into the selected agent: `AGENT/bin/fd` (fd 10.5.0) and `AGENT/bin/rg` (ripgrep 15.2.0), which stock Pi prefers over PATH. Personal tools are never replaced: an existing `fd` or `rg` (including links), or an `AGENT/bin` that is not an owned physical `0700`/`0755` directory, refuses at inspect and confirmation before any change. Both pinned archives are downloaded and verified in the private stage before the prefix or settings change.
+
+## On my existing Pi: agent checks and rollback
+
+"On my existing Pi" keeps a private prefix and runtime and reuses your Pi agent (`~/.pi/agent`). The agent may be `0755`, as Pi creates it. It must be a directory you own that no other user can write. The install writes `settings.json` (`packages`, `npmCommand`), `mcp.json` when Context7 is selected, and the pinned `bin/fd` and `bin/rg`.
+
+Pi downloads its own `fd` and `rg` into `AGENT/bin` on its first run. The install does not refuse them. It sets them aside instead:
+
+1. It moves Pi's `bin/fd` and `bin/rg` into `TARGET/backup/agent-tools/`. Their SHA-256, size and mode are recorded in `TARGET/state/agent-tools.json`.
+2. It writes the pinned `fd` and `rg` in their place.
+3. Uninstall removes the pinned copies and puts Pi's back, with the same bytes and modes.
+
+If `bin/fd` or `bin/rg` changed after the install (for example, Pi downloaded a newer copy), uninstall does not overwrite it. Pi's original is kept in `TARGET.removed-UTC.pi-tools/`, next to its `agent-tools.json`. Uninstall still completes, and Manage shows it as a success with a note naming that path. A slot that is now empty gets Pi's original back.
+
+Only regular files are set aside. These are refused as before: a link, a directory or another entry in place of `fd` or `rg`; a tool with extra hard links; a tool other users can write; and, on macOS, a tool with an ACL or BSD file flags.
+
+Shared mode keeps its refusal of an existing `fd` or `rg`. It has no agent rollback image and no uninstall that could put them back.
+
+These conditions refuse before anything is written, and the message names the path and the fix:
+
+| Condition | Fix |
+| --- | --- |
+| `AGENT/bin/fd` or `AGENT/bin/rg` is a link, a directory or another non-regular entry, has extra hard links, or is writable by other users | Move it out of `AGENT/bin` (`chmod go-w FILE` for permissions). Pi downloads its own again if it is ever missing. |
+| `settings.json` sets `npmCommand` or already declares `gentle-pi` (often left by an earlier attempt) | Remove that key or `packages` entry. |
+| `settings.json` or `mcp.json` is not a JSON object, is a link, has extra hard links, or is writable by other users | Fix the file (`chmod go-w FILE` for permissions). |
+| The agent is writable by other users | `chmod go-w AGENT`. |
+| The agent is a symbolic link | Select its real path instead. |
+| macOS: the agent has an ACL or BSD file flags (immutable, append-only) | `chmod -N AGENT` for an ACL; `chflags nouchg,nouappnd AGENT` for flags. |
+| Main preview with an agent that is not `0700` | `chmod 700 AGENT`, or choose Stable or Separate. |
+
+If the install fails after its first write, the installer puts back the exact bytes, modes and presence of every file it touched in the agent, including Pi's own `fd` and `rg` once they were set aside. It also removes its own temporaries and any `bin` directory it created. If the agent was replaced during the install, the installer does not write into it. Instead, the original files are saved beside the target, and the failure message gives their path.
+
+Once the installation is published, the agent is not rolled back. A later failure (readback, cleanup or timeout) is reported, and the agent keeps the bindings the published install records. Uninstall restores the agent from that evidence.
+
+Uninstall puts `settings.json` and `mcp.json` back as they were before the install: the same bytes and mode (Pi creates `settings.json` as `0644`). A file that did not exist before the install, such as an `mcp.json` that only Context7 created, is removed. The install records each file's presence and mode in `TARGET/state/agent.preimage.json`. Installs made before this record existed restore these files as owner-only `0600`, which never widens access. Uninstall refuses before any change when the agent changed since the install or the evidence is damaged.
 
 ## Undo Shared changes
 

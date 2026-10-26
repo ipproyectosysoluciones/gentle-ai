@@ -66,21 +66,16 @@ Workflow: "Gentle Shell macOS qualification". Owner: Panda (handoff document:
 `docs/gentle-shell-macos-handoff.md` on the feature branch).
 
 Status: installs, launches, versions (Pi 1.3.0, gentle-shell 1.3.0,
-node v24.18.0), artifact pins and recovery all PASS. The single failure is the
-final residue checkpoint:
+node v24.18.0), artifact pins and recovery all PASS.
 
-```
-QUALIFICATION-FAIL checkpoint=residue
-reason: "redirected home is not empty"
-```
-
-Commit `edc4242f730e` already improved the failure message to enumerate the
-leftover entries, so the next run names exactly what leaked. Likely candidates:
-a new Pi 1.3.0 state file under one of the redirected XDG dirs (changelog
-marker, MCP cache). Decide per entry: allowlist legitimate user state or fix
-the leak. The darwin test-suite debt (shared `writeInstallFixture`, canonical
-temp roots, darwin skips for linux-only Main admission, `userExecutable()` in
-the update check) is already fixed on main via #5681.
+Resolved: the residue checkpoint failed with "redirected home is not empty:
+['.local']" because Separate installs publish `~/.local/bin/gentle-shell`
+(7abb1eab5). The checkpoint now requires exactly that symlink, pointing at the
+Separate target's `bin/gentle-shell`, and nothing else in HOME. The
+`TestUserUnixChannelOverlay*` failures were a test-tag defect (the overlay is
+Linux amd64 only); those tests now build only there, and a darwin test pins
+the full-reconfigure fallback. The lane also runs `go test ./internal/tui/...`,
+whose shell tests now use canonical temporary HOMEs.
 
 ## 4. Open PR
 

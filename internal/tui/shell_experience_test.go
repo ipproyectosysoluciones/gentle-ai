@@ -2,7 +2,7 @@ package tui
 
 import (
 	"os"
-	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -54,7 +54,7 @@ func experienceFocus(t *testing.T, m Model, control screens.ShellExperienceContr
 
 func experienceStart(t *testing.T) Model {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shellTestHome(t))
 	m := NewModel(system.DetectionResult{}, "dev").WithShellInstaller()
 	m.Width, m.Height = 120, 30
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -64,10 +64,27 @@ func experienceStart(t *testing.T) Model {
 	return m
 }
 
+// shellHostCodeGraph keeps the agreed defaults unchanged: CodeGraph ON is
+// qualified on every host that ships the TUI install, macOS arm64 included.
+func shellHostCodeGraph(t *testing.T, m Model) Model {
+	t.Helper()
+	return m
+}
+
+// skipUnqualifiedMainPreview keeps Main preview flows on the platforms that
+// ship its producer: Linux amd64, macOS arm64 and Windows.
+func skipUnqualifiedMainPreview(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" {
+		t.Skip("Main preview is qualified on macOS arm64 only")
+	}
+}
+
 // experiencePlan ends configuration and returns the installation plan request.
 func experiencePlan(t *testing.T, m Model) (Model, shellinstaller.UserInstallRequest) {
 	t.Helper()
 	stubShellKernelGate(t)
+	m = shellHostCodeGraph(t, m)
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnd})
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.shellPlan == nil || m.shellExperience != nil {
@@ -98,7 +115,7 @@ func TestShellExperienceConfigureReachesPlan(t *testing.T) {
 	if request.Experience == nil || request.Experience.Persona != "unmanaged" || request.Experience.BackgroundSubagents != "off" {
 		t.Fatal("Configure lost profile at the installation plan")
 	}
-	wantDestination := filepath.Join(os.Getenv("HOME"), ".local", "share", "gentle-shell", "install")
+	wantDestination := shellDefaultTestDestination()
 	if request.Destination != wantDestination || request.Mode != "separate" {
 		t.Fatalf("default destination differs: %+v", request)
 	}

@@ -101,6 +101,9 @@ func userValidateInstall(req UserInstallRequest) error {
 		if req.SharedPrefix != "" || req.SharedAgent == "" || !privateHierarchyPath(req.SharedAgent) || userPathsOverlap(req.SharedAgent, req.Destination) {
 			return privateError("refused", errors.New("agent reuse requires one absolute existing agent disjoint from the target"))
 		}
+		if fresh {
+			return userAgentPreflight(req.SharedAgent, req.Destination, req.Experience)
+		}
 		return nil
 	}
 	if userPathsOverlap(req.SharedPrefix, req.SharedAgent) {
@@ -245,7 +248,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 		if manifest.PNPM != nil {
-			return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled"}, nil
+			return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", ""}, nil
 		}
 		if err = userVerifyInstalledGlobal(ctx, req.Destination, manifest); err != nil {
 			return result, userGraphRepairError(req.Destination, req.Mode, err)
@@ -253,10 +256,21 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if err = userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 			return result, err
 		}
-		return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled"}, nil
+		return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", ""}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, userUnixInstallBound)
 	defer cancel()
+	// Registered before the workspace finish so it observes the final outcome:
+	// any failure after the first write to the operator's Pi agent restores it.
+	// Once publication commits, the manifest is bound to the agent and the
+	// rollback is disarmed: later failures are reported, never restored.
+	var agentRollback *userAgentRollback
+	ctx, published := userWithPublicationCommit(ctx)
+	defer func() {
+		if agentRollback != nil && err != nil {
+			result, err = UserInstallResult{}, agentRollback.settle(err, *published, filepath.Dir(req.Destination))
+		}
+	}()
 	if _, statErr := os.Lstat(req.Destination); statErr == nil && userReconfigureTarget() == req.Destination {
 		// A reconfigure that only changes the SDK update channel swaps the
 		// installed SDK declaration in place; components, preferences,
@@ -334,6 +348,12 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, privateError("preimage", errors.Join(inspectErr, errors.New("selected files changed before global provisioning")))
 	}
 	sharedProvisioningStarted = req.Mode == "shared"
+	if req.Mode == "agent" {
+		// Global provisioning is the first write to the operator's agent.
+		if agentRollback, err = userBeginAgentRollback(agent); err != nil {
+			return result, fmt.Errorf("agent rollback image: %w", err)
+		}
+	}
 	userShellDetail(ctx, 3, 5, "Installing the global runtime")
 	cmd := exec.CommandContext(ctx, node, helperPath, root, prefix, agent, finalPrefix, req.Destination, req.Mode, "install")
 	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, prefix, agent)
@@ -375,6 +395,14 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil {
 		return result, fmt.Errorf("Main SDK + stock provider: %w", err)
 	}
+	if _, statErr := os.Lstat(req.Destination); req.Mode == "agent" && errors.Is(statErr, os.ErrNotExist) {
+		// A fresh agent install sets Pi's own fd/rg aside inside the stage;
+		// the agent rollback restores them on any failure before the commit.
+		userShellDetail(ctx, 4, 5, "Setting Pi's own fd/rg aside inside the installation")
+		if err = userSetAsideAgentTools(ctx, agent, root); err != nil {
+			return result, fmt.Errorf("set aside Pi's fd/rg: %w", err)
+		}
+	}
 	// A bind refusal here follows Shared provisioning: it stays uncertain and
 	// keeps the staged recovery root instead of claiming an atomic rollback.
 	userShellDetail(ctx, 4, 5, "Binding pinned tools into the agent")
@@ -399,7 +427,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	manifest.CodeGraph = req.Experience != nil && req.Experience.CodeGraph == "on"
 	manifest.PrefixIdentity, err = userIdentity(prefix)
 	if err == nil {
-		manifest.AgentIdentity, err = userIdentity(agent)
+		manifest.AgentIdentity, err = userSelectedAgentIdentity(req.Mode, agent)
 	}
 	if err != nil {
 		return result, err
@@ -449,11 +477,12 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 			return result, err
 		}
 	}
-	for selected, expected := range map[string]string{prefix: manifest.PrefixIdentity, agent: manifest.AgentIdentity} {
-		fresh, identityErr := userIdentity(selected)
-		if identityErr != nil || fresh != expected {
-			return result, privateError("preimage", identityErr)
-		}
+	freshPrefix, identityErr := userIdentity(prefix)
+	if identityErr != nil || freshPrefix != manifest.PrefixIdentity {
+		return result, privateError("preimage", identityErr)
+	}
+	if freshAgent, identityErr := userSelectedAgentIdentity(manifest.Mode, agent); identityErr != nil || freshAgent != manifest.AgentIdentity {
+		return result, privateError("preimage", identityErr)
 	}
 	if err = privateDestination(manifest.Destination); err != nil || ctx.Err() != nil {
 		return result, privateError("preimage", errors.Join(err, ctx.Err()))
@@ -462,24 +491,31 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 		return result, err
 	}
 	switched = true
+	userMarkPublicationCommitted(ctx)
 	if err = userDirectorySync(filepath.Dir(manifest.Destination)); err != nil {
 		return result, privateError("uncertain", err)
 	}
 	if _, err = userReadManifest(ctx, manifest.Destination); err != nil {
 		return result, privateError("uncertain", err)
 	}
-	userRecordPublishedShell(manifest)
+	registryErr := userRecordPublishedShell(manifest)
+	launcherNote := ""
 	if manifest.Mode == "separate" {
-		if err := PublishUserShellLauncher(manifest.Destination); err != nil {
+		report, err := PublishUserShellLauncher(manifest.Destination)
+		if err != nil {
 			return result, fmt.Errorf("installation published but launcher registration failed: %w", err)
 		}
+		launcherNote = userShellLauncherNote(report)
 	}
+	// Registration is bookkeeping for Manage, never installation authority:
+	// a refusal is reported with the result and never retracts the install.
+	launcherNote = userJoinNote(launcherNote, userRegistryNote(registryErr))
 	// The publication is renamed, read back and registered; drop only the
 	// ephemeral caches. Failure is reported but never retracts the install.
 	if cleanupErr := userPublishEphemeralCleanup(manifest.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", manifest.Destination, cleanupErr)
 	}
-	return UserInstallResult{manifest.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled"}, nil
+	return UserInstallResult{manifest.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", launcherNote}, nil
 }
 
 // userPublishEphemeralCleanup drops the installer's ephemeral caches after a
@@ -611,8 +647,10 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 	return userBootstrapPublish(ctx, output, filepath.Join(root, "runtime/node"))
 }
 
-// Selected personal tools are never replaced. AGENT/bin must be absent or an
+// Selected Shared tools are never replaced. AGENT/bin must be absent or an
 // owned physical 0700/0755 directory without fd or rg; links are not followed.
+// The agent target admits Pi's own fd/rg for its set-aside instead
+// (userAgentToolsAdmit); at bind time both find free slots here.
 func userToolBinAvailable(agent string) error {
 	bin := filepath.Join(agent, "bin")
 	if _, err := os.Lstat(bin); errors.Is(err, os.ErrNotExist) {
@@ -623,10 +661,14 @@ func userToolBinAvailable(agent string) error {
 	if err := privateNativeDirectory(bin); err != nil {
 		return privateError("refused", fmt.Errorf("agent bin %q must be absent or an owned physical 0700/0755 directory: %w", bin, err))
 	}
+	var present []string
 	for _, source := range userToolSources {
 		if _, err := os.Lstat(filepath.Join(bin, source.name)); !errors.Is(err, os.ErrNotExist) {
-			return privateError("refused", errors.Join(fmt.Errorf("agent bin %q already contains %s; move it before Shared installation", bin, source.name), err))
+			present = append(present, fmt.Sprintf("%s (%q)", source.name, filepath.Join(bin, source.name)))
 		}
+	}
+	if len(present) != 0 {
+		return privateError("refused", fmt.Errorf("agent bin %q already contains %s; Gentle Shell never replaces existing tools: move them out of that directory, then retry (Pi downloads its own copies again if they are ever missing)", bin, strings.Join(present, " and ")))
 	}
 	return nil
 }
@@ -925,11 +967,11 @@ func userReadManifest(ctx context.Context, root string) (userManifest, error) {
 			return manifest, err
 		}
 	}
-	for path, expected := range map[string]string{manifest.Prefix: manifest.PrefixIdentity, manifest.Agent: manifest.AgentIdentity} {
-		actual, err := userIdentity(path)
-		if err != nil || actual != expected {
-			return manifest, privateError("preimage", err)
-		}
+	if actual, err := userIdentity(manifest.Prefix); err != nil || actual != manifest.PrefixIdentity {
+		return manifest, privateError("preimage", err)
+	}
+	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || actual != manifest.AgentIdentity {
+		return manifest, privateError("preimage", err)
 	}
 	for _, source := range []struct{ path, pin string }{{"supervisor", manifest.SupervisorSHA}, {"runtime/node/bin/node", privateNativeNodeSHA}} {
 		if len(source.pin) != 64 {

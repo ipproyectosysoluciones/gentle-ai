@@ -169,18 +169,44 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		"NPM_CONFIG_CACHE="+filepath.Join(root, "runtime/cache"), "NODE_USE_SYSTEM_CA=1"), nil
 }
 
+// userWindowsExecutable is the running installer image in its long form.
+// GetModuleFileName reports the path as launched, which may use 8.3 short
+// components (for example C:\Users\JOHNSM~1 for a long or spaced user name);
+// the short name is the same directory entry, not an alias. Expansion follows
+// no reparse point and keeps the drive, so the identity check that follows
+// still refuses subst/mapped drives, junctions and symbolic links.
+func userWindowsExecutable() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	short, err := windows.UTF16PtrFromString(self)
+	if err != nil {
+		return "", err
+	}
+	var long [windows.MAX_LONG_PATH]uint16
+	length, err := windows.GetLongPathName(short, &long[0], uint32(len(long)))
+	if err != nil || length == 0 || length >= uint32(len(long)) {
+		return "", errors.Join(err, errors.New("Windows installer image path cannot be expanded"))
+	}
+	return windows.UTF16ToString(long[:length]), nil
+}
+
 func userWindowsBinding(root, product string) []byte {
 	return []byte("@echo off\r\n\"" + filepath.Join(root, "supervisor.exe") + "\" shell launch \"" + root + "\" " + product + " %*\r\n")
 }
 
 // Canonical complete JSON rejects missing, duplicate, aliased and unknown fields.
+// The retained selection is the six-field provision ABI: install writes it
+// without the profile, whose preferences live in the staged config/state/mcp
+// files, so a retained Experience is never consumed and is refused.
 func userWindowsSelection(data []byte, root string) (UserInstallRequest, error) {
 	var req UserInstallRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return UserInstallRequest{}, err
 	}
-	if err := userExperienceSupported(req.Experience); err != nil {
-		return UserInstallRequest{}, err
+	if req.Experience != nil {
+		return UserInstallRequest{}, errors.New("Windows retained selection carries an experience profile; preferences are retained only in the staged configuration")
 	}
 	canonical, _ := json.Marshal(req)
 	if string(data) != string(canonical) || req.Destination != root || req.Mode != "separate" || req.SharedPrefix != "" || req.SharedAgent != "" || (req.Channel != "stable" && req.Channel != "main") {
@@ -445,7 +471,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
 				fmt.Fprintf(os.Stderr, "Windows installation is verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
 			}
-			return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed"}, nil
+			return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed", ""}, nil
 		}
 		// A reconfigure that only changes the SDK update channel swaps the
 		// installed SDK in place; components, preferences, runtimes and the
@@ -631,7 +657,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err := userWindowsWrite(filepath.Join(stage, "complete-generated-lock-sri.mjs"), lockHelper); err != nil {
 		return result, err
 	}
-	self, err := os.Executable()
+	self, err := userWindowsExecutable()
 	if err != nil {
 		return result, err
 	}
@@ -739,7 +765,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
 	}
-	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed"}, nil
+	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed", ""}, nil
 }
 
 // userWindowsPublishLauncher puts a tiny .cmd shim in the user's WindowsApps

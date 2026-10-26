@@ -76,6 +76,41 @@ func TestUserMainSnapshotRejectsPublisherFailures(t *testing.T) {
 	}
 }
 
+// A refused publisher response names what was refused, so a GitHub rate limit
+// (unauthenticated API calls share a per-network quota) is not an opaque error.
+func TestUserMainSnapshotNamesPublisherRefusal(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		status   int
+		encoding string
+		want     []string
+	}{
+		{name: "rate limited", status: http.StatusForbidden, want: []string{"api.github.com", "HTTP 403", "rate limit"}},
+		{name: "too many requests", status: http.StatusTooManyRequests, want: []string{"HTTP 429", "rate limit"}},
+		{name: "not found", status: http.StatusNotFound, want: []string{"HTTP 404"}},
+		{name: "encoding", status: http.StatusOK, encoding: "gzip", want: []string{"Content-Encoding \"gzip\""}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GENTLE_AI_MAIN_FALLBACK", "")
+			client := &http.Client{Transport: userMainResponse(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tt.status, Header: http.Header{"Content-Encoding": []string{tt.encoding}}, ContentLength: 2, Body: userMainBody{Reader: strings.NewReader("{}"), close: func() {}}}, nil
+			})}
+			_, data, err := userMainSnapshotUsing(context.Background(), client)
+			if err == nil || data != nil {
+				t.Fatalf("refused publisher response became usable: %v", err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal %q does not name %q", err, want)
+				}
+			}
+			if tt.status != http.StatusForbidden && tt.status != http.StatusTooManyRequests && strings.Contains(err.Error(), "rate limit") {
+				t.Fatalf("non rate-limit refusal blamed the rate limit: %v", err)
+			}
+		})
+	}
+}
+
 func TestUserMainDescriptorPreservesSourceOnlyContract(t *testing.T) {
 	commit, digest := strings.Repeat("a", 40), strings.Repeat("b", 64)
 	artifact, err := userMainDescriptor(commit, digest)

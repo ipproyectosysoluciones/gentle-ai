@@ -33,7 +33,7 @@ func userCodeGraphLaunchEnv(root string, manifest userManifest, cmd *exec.Cmd) {
 func userCodeGraphCommandWithNode(root, node string) string {
 	node = strings.ReplaceAll(filepath.Join(root, node), "'", "'\\''")
 	root = strings.ReplaceAll(root, "'", "'\\''")
-	return "#!/bin/sh\nexec '" + node + "' '" + root + "/runtime/codegraph/node_modules/@colbymchenry/codegraph-linux-x64/lib/dist/bin/codegraph.js' \"$@\"\n"
+	return "#!/bin/sh\nexec '" + node + "' '" + root + "/runtime/codegraph/node_modules/@colbymchenry/" + userCodeGraphSources[1].name + "/lib/dist/bin/codegraph.js' \"$@\"\n"
 }
 
 func userStageCodeGraphExecutable(ctx context.Context, stage, destination string) error {

@@ -5,14 +5,13 @@ import (
 	"testing"
 )
 
-// skipDarwinUnqualifiedMain documents why Main/advanced admission tests do not
-// run on darwin: product policy intentionally refuses these profiles there
-// ("SDK Main + stock provider is qualified on Linux amd64 today; macOS support
-// is being completed"). The asserted behavior is correct on Linux; the skip
-// records that darwin is not qualified yet instead of expecting refusals.
+// skipDarwinUnqualifiedMain documents why these Linux admission tests do not
+// run on darwin: they assert the Linux legacy authenticated worker and its
+// GGA/stock PNPM publication refusals, which have no darwin producer. Main
+// preview on macOS arm64 is covered by the unix Main and overlay tests.
 func skipDarwinUnqualifiedMain(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "darwin" {
-		t.Skip("SDK Main qualification is Linux amd64 only; macOS support is being completed")
+		t.Skip("Linux legacy worker admission; darwin Main is covered by the unix Main tests")
 	}
 }

@@ -5,9 +5,13 @@ package shellinstaller
 import (
 	"context"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
+
+// userMainSDKAction is the one boundary through which Go drives the owned
+// provisioner's Main actions. Tests substitute it to observe the exact action
+// sequence and its filesystem effects without executing Node.
+var userMainSDKAction = userVerifyMainBindingsAction
 
 // The real worker owns this action; qualification aliases remain in tests.
 func userVerifyMainBindingsAction(ctx context.Context, root, finalRoot, prefix, agent string, artifact userSnapshotArtifact, action string) error {
@@ -48,12 +52,34 @@ func userInstallMainSDK(ctx context.Context, root, finalRoot, prefix, agent stri
 }
 
 func userComposeMainSDK(ctx context.Context, root, finalRoot, prefix, agent string, artifact userSnapshotArtifact) error {
-	for _, action := range []string{"materialize-main-sdk-source", "materialize-main-sdk-runtime", "select-main-sdk-package"} {
-		if err := userVerifyMainBindingsAction(ctx, root, finalRoot, prefix, agent, artifact, action); err != nil {
+	if err := userMaterializeMainSDK(ctx, root, finalRoot, prefix, agent, artifact); err != nil {
+		return err
+	}
+	if err := userMainSDKAction(ctx, root, finalRoot, prefix, agent, artifact, "select-main-sdk-package"); err != nil {
+		return err
+	}
+	return userMainSDKAction(ctx, root, finalRoot, prefix, agent, artifact, userMainSDKSelectedAction)
+}
+
+// userMainSDKSelectedAction verifies a runtime-materialized composition whose
+// agent declares the composed package. It is the only verification that holds
+// for an installed Main tree: the non-runtime verify-main-sdk-composition
+// treats the materialized stock native member as extra.
+const userMainSDKSelectedAction = "verify-main-sdk-selected"
+
+// userMaterializeMainSDK writes the composed Main SDK under root: the source
+// composition, then the pinned stock native member and the runtime/node_modules
+// dependency link, each with its exact provisioner readback. The fresh install
+// and the Unix channel overlay share it; only the selection step differs
+// (the provisioner selects an unpublished stage, the overlay flips the
+// published settings itself), and both verify with userMainSDKSelectedAction.
+func userMaterializeMainSDK(ctx context.Context, root, finalRoot, prefix, agent string, artifact userSnapshotArtifact) error {
+	for _, action := range []string{"materialize-main-sdk-source", "materialize-main-sdk-runtime"} {
+		if err := userMainSDKAction(ctx, root, finalRoot, prefix, agent, artifact, action); err != nil {
 			return err
 		}
 	}
-	return userVerifyMainBindingsAction(ctx, root, finalRoot, prefix, agent, artifact, "verify-main-sdk-selected")
+	return nil
 }
 
 // Historical nil metadata keeps the exact ordinary stock verifier. A selected
@@ -62,14 +88,14 @@ func userVerifyInstalledGlobal(ctx context.Context, root string, manifest userMa
 	if manifest.MainSDK == nil {
 		return userVerifyGlobal(ctx, root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode)
 	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || (manifest.Mode != "separate" && manifest.Mode != "agent") || manifest.Destination != root || manifest.Prefix != filepath.Join(root, "prefix") {
-		return experienceError("Main SDK manifest requires qualified Linux amd64 bindings for On my existing Pi or Separate")
+	if !userMainPlatform() || (manifest.Mode != "separate" && manifest.Mode != "agent") || manifest.Destination != root || manifest.Prefix != filepath.Join(root, "prefix") {
+		return experienceError("Main SDK manifest requires qualified Linux amd64 or macOS arm64 bindings for On my existing Pi or Separate")
 	}
 	if manifest.Mode == "separate" && manifest.Agent != filepath.Join(root, "agent") {
-		return experienceError("Main SDK manifest requires qualified Linux amd64 bindings for On my existing Pi or Separate")
+		return experienceError("Main SDK manifest requires qualified Linux amd64 or macOS arm64 bindings for On my existing Pi or Separate")
 	}
 	if manifest.Mode == "agent" && (manifest.Agent == "" || !privateHierarchyPath(manifest.Agent) || strings.HasPrefix(manifest.Agent, root+"/")) {
 		return experienceError("Main SDK manifest requires a qualified external agent")
 	}
-	return userVerifyMainBindingsAction(ctx, root, root, manifest.Prefix, manifest.Agent, *manifest.MainSDK, "verify-main-sdk-selected")
+	return userMainSDKAction(ctx, root, root, manifest.Prefix, manifest.Agent, *manifest.MainSDK, userMainSDKSelectedAction)
 }

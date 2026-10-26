@@ -12,7 +12,8 @@ import (
 
 // writeWindowsChannelFixture builds a minimal canonical Separate installation
 // that passes userWindowsManifestRead, plus the stable runtime state the
-// stable update check compares.
+// stable update check compares. A published installation always carries its
+// private config directory, which the channel preference lives in.
 func writeWindowsChannelFixture(t *testing.T) (home, target string, install UserShellInstall) {
 	t.Helper()
 	home = t.TempDir()
@@ -52,6 +53,9 @@ func writeWindowsChannelFixture(t *testing.T) (home, target string, install User
 		t.Fatal(err)
 	}
 	if err := userWindowsWrite(filepath.Join(target, "manifest.json"), append(encoded, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(target, "config"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(target, "runtime", "node"), 0700); err != nil {

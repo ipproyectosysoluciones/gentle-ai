@@ -100,6 +100,7 @@ func shellUpdateModel(t *testing.T, install shellinstaller.UserShellInstall, sel
 // and prepares the channel-pinned overlay request instead of the full
 // component reconfigure.
 func TestShellUpdateRoutesChannelOnlyDeltaToOverlay(t *testing.T) {
+	skipUnqualifiedMainPreview(t)
 	_, target := managedInstallFixture(t)
 	install := shellinstaller.UserShellInstall{Target: target, Mode: "separate", Channel: "stable"}
 	loaded, err := shellinstaller.LoadUserShellExperience(install)
@@ -127,16 +128,18 @@ func TestShellUpdateRoutesChannelOnlyDeltaToOverlay(t *testing.T) {
 }
 
 // Update-now with any other component delta keeps the full reconfigure: the
-// request carries no pinned channel.
+// request carries the selected component and no pinned channel. Removing
+// CodeGraph is admitted on every OS, so the route is proven natively.
 func TestShellUpdateRoutesComponentDeltaToFullReconfigure(t *testing.T) {
 	_, target := managedInstallFixture(t)
+	setManifestCodeGraph(t, target, true)
 	install := shellinstaller.UserShellInstall{Target: target, Mode: "separate", Channel: "stable"}
 	loaded, err := shellinstaller.LoadUserShellExperience(install)
 	if err != nil {
 		t.Fatal(err)
 	}
 	selected := loaded
-	selected.CodeGraph = "on"
+	selected.CodeGraph = "off"
 	m := shellUpdateModel(t, install, selected)
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
@@ -146,7 +149,10 @@ func TestShellUpdateRoutesComponentDeltaToFullReconfigure(t *testing.T) {
 	if m.shellPlanRequest.Destination != target {
 		t.Fatalf("component update request differs: %+v", m.shellPlanRequest)
 	}
-	if m.shellPlanRequest.Experience == nil || m.shellPlanRequest.Experience.SDKSource != loaded.SDKSource {
+	if m.shellPlanRequest.Experience == nil || *m.shellPlanRequest.Experience != selected {
+		t.Fatalf("component update dropped the selected profile: %+v", m.shellPlanRequest.Experience)
+	}
+	if m.shellPlanRequest.Experience.SDKSource != loaded.SDKSource {
 		t.Fatalf("component update lost the installed channel authority: %+v", m.shellPlanRequest.Experience)
 	}
 	if _, err := os.Stat(filepath.Join(target, "config", "update-channel.json")); !os.IsNotExist(err) {

@@ -30,6 +30,41 @@ func userShellRegistryHome() string {
 	return value
 }
 
+// userServiceIntentEnvironment carries the host's managed-install intents
+// into a delegated unit, whose environment is rebuilt from scratch (env -i).
+// Each value passes the same validation its reader applies; the registry
+// home must be the unit's own HOME. The launcher dir PATH decision crosses as
+// a boolean computed from the caller's PATH, never as that PATH itself, and
+// the startup file choice as a path the unit revalidates.
+func userServiceIntentEnvironment(home string) []string {
+	var env []string
+	if registry := userShellRegistryHome(); registry != "" && registry == home {
+		env = append(env, "GENTLE_AI_SHELL_REGISTRY_HOME="+registry)
+	}
+	if target := userReconfigureTarget(); target != "" {
+		env = append(env, "GENTLE_AI_RECONFIGURE_TARGET="+target)
+	}
+	if os.Getenv("GENTLE_AI_MAIN_FALLBACK") == "1" {
+		env = append(env, "GENTLE_AI_MAIN_FALLBACK=1")
+	}
+	return append(env, userLauncherIntentEnvironment(home)...)
+}
+
+// userLauncherIntentEnvironment carries the caller terminal's launcher PATH
+// decision, and the startup file to edit when the dir is missing from it.
+func userLauncherIntentEnvironment(home string) []string {
+	if home == "" {
+		return nil
+	}
+	if userLauncherDirOnPath(filepath.Join(home, ".local", "bin")) {
+		return []string{userLauncherOnPathIntent + "=1"}
+	}
+	if profile, ok := userLauncherProfile(home); ok {
+		return []string{userLauncherProfileIntent + "=" + profile}
+	}
+	return nil
+}
+
 func userBeginShellReplacement(destination string) (string, bool, error) {
 	if userReconfigureTarget() != destination {
 		return "", false, nil
@@ -63,14 +98,29 @@ func userRestoreShellReplacement(destination, backup string) error {
 	return userDirectorySync(filepath.Dir(destination))
 }
 
-func userRecordPublishedShell(manifest userManifest) {
+func userRecordPublishedShell(manifest userManifest) error {
 	home := userShellRegistryHome()
 	if home == "" {
-		return
+		return nil
 	}
 	channel := "stable"
 	if manifest.MainSDK != nil {
 		channel = "main-preview"
 	}
-	_ = RecordUserShellInstall(home, UserShellInstall{Target: manifest.Destination, Mode: manifest.Mode, Channel: channel})
+	return RecordUserShellInstall(home, UserShellInstall{Target: manifest.Destination, Mode: manifest.Mode, Channel: channel})
+}
+
+// userRegistryNote words a registration refusal for the completion output.
+func userRegistryNote(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "Installation is published and verified, but it was not registered in ~/.gentle-ai/shell-installs.json for Manage: " + err.Error()
+}
+
+func userJoinNote(note, extra string) string {
+	if note == "" || extra == "" {
+		return note + extra
+	}
+	return note + "\n" + extra
 }

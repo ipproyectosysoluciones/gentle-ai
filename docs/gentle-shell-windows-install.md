@@ -25,6 +25,7 @@ already contains this unreleased installer.
 | Boundary | Implementation |
 |---|---|
 | Scope | Windows 11 x64, Separate only; Server and ARM64 refused |
+| gentle-ai TUI experience | Persona, Background subagents, Strict TDD, Global RDD, CodeGraph and Context7 are staged on Stable and on Main preview; Main preview selects the Main channel; "On my existing Pi" is shown disabled with the Separate-only reason; `selection.json` never retains the profile |
 | Tooling | Private pinned Node 24.18.0 and Go 1.27.1 ZIPs |
 | Composition | Stock Pi 1.0.0 and gentle-pi 4.0.0, complete SHA512 source lock, no implicit lifecycle scripts |
 | Native | Explicit authenticated stock Go SumDB source-build API for native 4.0.0 |

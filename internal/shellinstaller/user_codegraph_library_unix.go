@@ -18,22 +18,25 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 )
 
-// Fixed complete npm archives, including the Node member we deliberately omit.
-var userCodeGraphSources = []struct {
+// userCodeGraphSource pins one complete npm archive. node is the exact size of
+// a vendored Node member that is consumed and never written (0 when absent).
+type userCodeGraphSource struct {
 	name, sri      string
 	size, unpacked int64
 	entries        int
-}{
-	{"codegraph", "sha512-xZayboJt6T3QBzBsBsI0eJ3J/tN4vYs6LMuvrxJVdM71yQFjrFKFeV3KsbicAgkj6AHnTXxUNk26g9BYwkNMgg==", 210435, 603273, 164},
-	{"codegraph-linux-x64", "sha512-bjfa+0IyjbxpZz7ghznN4qMPoYVSiZafeZu/rXGdg3VI+kEPOPZrk2vmtWIU9tBPGVJbeU2Kwa/0Z2DkUGOJ9A==", 56164932, 234498802, 854},
+	node           int64
 }
 
-// Qualified Linux amd64 Separate preparation retains the complete profile.
+// userCodeGraphAcquire is the pinned network producer; tests substitute
+// fixture archives that still pass every integrity and shape check.
+var userCodeGraphAcquire = userAcquireCodeGraphArchives
+
+// Qualified Linux amd64 and macOS arm64 Separate preparation retains the
+// complete profile.
 // The native coordinator acquires the same sources before sealed production;
 // publication consumes their authenticated DATA without network or suppliers.
 func userCodeGraphPreferencesSupported(profile *UserExperience) bool {
@@ -58,13 +61,13 @@ func userCodeGraphProvision(ctx context.Context, root, mode string, profile *Use
 	if err := ctx.Err(); err != nil {
 		return privateError("canceled", err)
 	}
-	if (mode != "separate" && mode != "shared") || runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || !privateHierarchyPath(root) {
-		return privateError("refused", errors.New("CodeGraph library requires a live Linux amd64 Separate or Shared stage"))
+	if (mode != "separate" && mode != "shared") || !userCodeGraphPlatform() || !privateHierarchyPath(root) {
+		return privateError("refused", errors.New("CodeGraph library requires a live "+userCodeGraphPlatformName+" Separate or Shared stage"))
 	}
 	if _, err := privateDirectory(filepath.Join(root, "runtime")); err != nil {
 		return err
 	}
-	archives, err := userAcquireCodeGraphArchives(ctx)
+	archives, err := userCodeGraphAcquire(ctx)
 	if err != nil {
 		return err
 	}
@@ -157,7 +160,7 @@ func userCodeGraphMembers(ctx context.Context, archives [][]byte) ([]userExperie
 			}
 			seen[header.Name] = true
 			total += header.Size
-			if source.name == "codegraph-linux-x64" && header.Name == "package/node" && header.Size == 123438592 {
+			if source.node > 0 && header.Name == "package/node" && header.Size == source.node {
 				continue
 			}
 			if header.Size < 0 || header.Size > 32<<20 {
@@ -173,7 +176,7 @@ func userCodeGraphMembers(ctx context.Context, archives [][]byte) ([]userExperie
 			files = append(files, userExperienceStageFile{"node_modules/@colbymchenry/" + source.name + "/" + strings.TrimPrefix(header.Name, "package/"), data})
 		}
 		_, tailErr := io.Copy(io.Discard, bounded)
-		if err := errors.Join(tailErr, gz.Close(), ctx.Err()); err != nil || bounded.N == 0 || total != source.unpacked || len(seen) != source.entries || (i == 1 && !seen["package/node"]) {
+		if err := errors.Join(tailErr, gz.Close(), ctx.Err()); err != nil || bounded.N == 0 || total != source.unpacked || len(seen) != source.entries || (source.node > 0 && !seen["package/node"]) {
 			return nil, errors.Join(err, errors.New("CodeGraph archive shape differs"))
 		}
 		var pkg struct{ Name, Version string }

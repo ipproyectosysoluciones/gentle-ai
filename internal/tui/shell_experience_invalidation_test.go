@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,12 +12,21 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
-func shellExperienceTarget(t *testing.T) string {
+// shellTestHome returns a fresh temporary directory in canonical form. The
+// installer refuses any private path that differs from its EvalSymlinks
+// result, and the darwin temp root lives under the /var -> /private/var link.
+func shellTestHome(t *testing.T) string {
 	t.Helper()
-	parent, err := filepath.EvalSymlinks(t.TempDir())
+	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	return home
+}
+
+func shellExperienceTarget(t *testing.T) string {
+	t.Helper()
+	parent := shellTestHome(t)
 	if err := os.Chmod(parent, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -49,8 +59,11 @@ func TestShellExperienceEditingImmediatelyInvalidatesInspection(t *testing.T) {
 }
 
 func TestShellExperienceNonPrivateParentRefusesBeforeConsent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX 0755 mode bits are not Windows custody; TestShellExperienceForeignWritableParentRefusesBeforeConsentWindows covers the Windows DACL refusal")
+	}
 	stubShellKernelGate(t) // The real inspection (not the OS guard) must refuse the non-private parent.
-	home := t.TempDir()
+	home := shellTestHome(t)
 	t.Setenv("HOME", home)
 	base := filepath.Join(home, ".local", "share", "gentle-shell")
 	if err := os.MkdirAll(base, 0755); err != nil {

@@ -68,7 +68,63 @@ func waitShellInstallEvent(events <-chan shellInstallEvent) tea.Cmd {
 }
 
 func (m Model) beginShellInstall() (tea.Model, tea.Cmd) {
-	return m.launchShellInstall(m.shellPlanRequest, false)
+	return m.requestShellInstall(m.shellPlanRequest, false)
+}
+
+// shellRootRiskGate is injectable for tests; production uses the installer
+// package's entry gate.
+var shellRootRiskGate = shellinstaller.RootRiskGate
+
+// shellRootRiskPrompt holds the typed root acceptance for plan-driven
+// installs: the plan screen confirms without the selection model, so the
+// root warning must live here too, never only behind the review screen.
+type shellRootRiskPrompt struct {
+	request  shellinstaller.UserInstallRequest
+	fallback bool
+	input    string
+}
+
+// requestShellInstall routes every host TUI launch through the root gate:
+// an unaccepted root operator sees the typed warning before any worker runs.
+func (m Model) requestShellInstall(request shellinstaller.UserInstallRequest, fallback bool) (tea.Model, tea.Cmd) {
+	if err := shellRootRiskGate(); err != nil {
+		m.shellRootRisk = &shellRootRiskPrompt{request: request, fallback: fallback}
+		return m, nil
+	}
+	return m.launchShellInstall(request, fallback)
+}
+
+func (m Model) updateShellRootRisk(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch key.String() {
+	case "ctrl+c", "esc":
+		m.shellRootRisk = nil
+		return m, nil
+	case "enter":
+		if strings.TrimSpace(m.shellRootRisk.input) != shellinstaller.RootRiskPhrase {
+			m.shellRootRisk.input = ""
+			return m, nil
+		}
+		if err := os.Setenv(shellinstaller.RootRiskEnv, shellinstaller.RootRiskBinding); err != nil {
+			m.shellRootRisk = nil
+			return m, nil
+		}
+		prompt := *m.shellRootRisk
+		m.shellRootRisk = nil
+		return m.launchShellInstall(prompt.request, prompt.fallback)
+	case "backspace":
+		if input := []rune(m.shellRootRisk.input); len(input) > 0 {
+			m.shellRootRisk.input = string(input[:len(input)-1])
+		}
+		return m, nil
+	}
+	if key.Type == tea.KeyRunes || key.Type == tea.KeySpace {
+		m.shellRootRisk.input += key.String()
+	}
+	return m, nil
 }
 
 func (m Model) launchShellInstall(request shellinstaller.UserInstallRequest, fallback bool) (tea.Model, tea.Cmd) {
@@ -167,13 +223,10 @@ func (m Model) restoreUpdateConfig(update *shellUpdateState) Model {
 	return m
 }
 
+// beginComponentUpdate reconfigures with the SELECTED profile: the installed
+// profile would silently drop every component and preference delta.
 func (m Model) beginComponentUpdate(update *shellUpdateState) (tea.Model, error) {
-	install := update.install
-	profile, err := shellinstaller.LoadUserShellExperience(install)
-	if err != nil {
-		return m, err
-	}
-	return m.beginShellUpdateInstall(install, profile)
+	return m.beginShellUpdateInstall(update.install, shellForceGGAOff(update.config.profile))
 }
 
 // beginShellUpdateInstall prepares the shared plan/confirmation flow for a
@@ -389,7 +442,11 @@ func manageActions(manage *shellManageState) []string {
 		return []string{"Back"}
 	}
 	var actions []string
-	if len(manage.preferences) > 0 {
+	// Component deltas need the full reconfigure, which also applies every
+	// preference change of the same delta; preference-only deltas stay in place.
+	if len(manage.components) > 0 {
+		actions = append(actions, "Update installation")
+	} else if len(manage.preferences) > 0 {
 		actions = append(actions, "Apply preferences")
 	}
 	actions = append(actions, "Back")
@@ -417,9 +474,17 @@ func (m Model) updateShellManage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if result, ok := msg.(shellUninstallResult); ok {
 		manage.working = false
+		manage.uninstallErr = nil
 		if result.err != nil {
-			manage.uninstallErr = result.err
-			return m, nil
+			// An uninstall that completed with a note (for example a Pi tool
+			// kept because Pi replaced it) is a success; on the uninstalled
+			// screen uninstallErr carries that note, rendered as a note.
+			var note interface{ UninstallNote() string }
+			if result.backup == "" || !errors.As(result.err, &note) {
+				manage.uninstallErr = result.err
+				return m, nil
+			}
+			manage.uninstallErr = errors.New(note.UninstallNote())
 		}
 		manage.backup, manage.uninstalled = result.backup, true
 		return m, nil
@@ -438,7 +503,9 @@ func (m Model) updateShellManage(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setScreen(ScreenWelcome)
 		return m, nil
 	}
-	if manage.uninstalled {
+	// Both final summaries promise "Enter: back to menu"; detection reloads
+	// the installed preferences when the operator returns.
+	if manage.uninstalled || manage.applied {
 		if key.String() == "enter" || key.String() == "esc" || key.String() == "ctrl+c" {
 			return backToMenu()
 		}
@@ -498,6 +565,15 @@ func (m Model) updateShellManage(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			manage.applied, manage.err = true, nil
+		case "Update installation":
+			next, err := m.beginShellUpdateInstall(manage.install, shellForceGGAOff(manage.config.profile))
+			if err != nil {
+				manage.err = err
+				return m, nil
+			}
+			planned := next.(Model)
+			planned.shellManage, planned.shellPlanConfig = nil, &manage.config
+			return planned, nil
 		case "Uninstall this installation":
 			manage.confirm, manage.cursor = true, 0
 		default:
@@ -552,11 +628,12 @@ func (m Model) manageDetectedInstall() Model {
 		profile = loaded
 	}
 	_, _, found, note := shellDetectPi()
-	m.shellExperience = &shellExperienceConfig{
+	config, _ := shellPlatformConfigure(shellExperienceConfig{
 		profile: profile, mode: install.Mode, choice: "existing",
 		prefix: install.Prefix, agent: install.Agent, piFound: found, piNote: note,
 		existing: []shellinstaller.UserShellInstall{install}, reconfigure: true, target: install.Target,
-	}
+	}, nil)
+	m.shellExperience = &config
 	m.shellInstallModel = cli.NewShellInstallModelWithExperience(nil, profile)
 	m.shellDetected, m.shellDetectedProfiles = nil, nil
 	m.shellDetectedCursor = 0
@@ -645,7 +722,7 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch key.Type {
 			case tea.KeyEnter:
 				request := m.shellInstallSelection.Request
-				return m.launchShellInstall(request, true)
+				return m.requestShellInstall(request, true)
 			case tea.KeyEsc, tea.KeyCtrlC:
 				_ = os.Unsetenv("GENTLE_AI_MAIN_FALLBACK")
 				m.shellInstallRun, m.shellInstallEvents = nil, nil
@@ -676,6 +753,9 @@ func (m Model) ShellInstallSelection() cli.ShellInstallSelection {
 }
 
 func (m Model) updateShellInstall(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.shellRootRisk != nil {
+		return m.updateShellRootRisk(msg)
+	}
 	if len(m.shellDetected) > 0 {
 		return m.updateShellDetected(msg)
 	}
@@ -710,6 +790,12 @@ func (m Model) updateShellInstall(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.shellExperience != nil {
+		// Platform-unsupported targets stay disabled with their reason.
+		config, refused := shellPlatformConfigure(*m.shellExperience, msg)
+		m.shellExperience = &config
+		if refused {
+			return m, nil
+		}
 		return m.configureShellExperience(msg)
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {

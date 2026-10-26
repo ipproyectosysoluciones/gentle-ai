@@ -8,6 +8,17 @@ import (
 	"testing"
 )
 
+// stubUserWindowsKernelGate bypasses only the Windows 11 / unelevated host
+// qualification (the CI runner is an elevated Windows Server); the manifest,
+// identity and confirmation checks below stay real. The previous gate is
+// restored after the test.
+func stubUserWindowsKernelGate(t *testing.T) {
+	t.Helper()
+	previous := UserKernelGate
+	t.Cleanup(func() { UserKernelGate = previous })
+	UserKernelGate = func() error { return nil }
+}
+
 // A confirmed managed reconfigure retires the existing installation to its
 // .replaced- backup before staging, then publishes into the now-absent
 // destination. The confirmation must therefore describe the publication-time
@@ -16,6 +27,7 @@ import (
 // every full reconfigure refuses to publish. The completed-owned-installation
 // manifest validation still gates the retire itself.
 func TestUserWindowsReconfigureConfirmationSurvivesRetire(t *testing.T) {
+	stubUserWindowsKernelGate(t)
 	root := userWindowsLaunchFixture(t)
 	t.Setenv("GENTLE_AI_RECONFIGURE_TARGET", root)
 	req := UserInstallRequest{Destination: root, Mode: "separate", Channel: "stable", Experience: &UserExperience{Persona: "gentleman", BackgroundSubagents: "on", SDKSource: "stable"}}
@@ -42,6 +54,7 @@ func TestUserWindowsReconfigureConfirmationSurvivesRetire(t *testing.T) {
 // reconfigure route, and a destination that is not a completed owned
 // installation is still refused.
 func TestUserWindowsReconfigureConfirmationKeepsGuards(t *testing.T) {
+	stubUserWindowsKernelGate(t)
 	root := userWindowsLaunchFixture(t)
 	req := UserInstallRequest{Destination: root, Mode: "separate", Channel: "stable", Experience: &UserExperience{Persona: "gentleman", BackgroundSubagents: "on", SDKSource: "stable"}}
 	if _, err := InspectUserInstall(req); err == nil || !strings.Contains(err.Error(), "explicit experience requires a new empty target") {

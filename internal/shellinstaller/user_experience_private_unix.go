@@ -24,24 +24,7 @@ func userStagePrivateChoices(ctx context.Context, root, mode string, profile *Us
 		return nil
 	}
 	if profile.GlobalRDD != "" {
-		err := userStageJSON(ctx, root, "home/.gentle-ai", "state.json", func(fields map[string]json.RawMessage) error {
-			if raw, ok := fields["rdd_mode"]; ok {
-				var previous string
-				if json.Unmarshal(raw, &previous) != nil || (previous != "" && previous != "on" && previous != "off") {
-					return errors.New("generated RDD mode is not canonical")
-				}
-			}
-			if raw, ok := fields["rdd_mode_recorded_at"]; ok && string(raw) != "null" {
-				var previous time.Time
-				if json.Unmarshal(raw, &previous) != nil || previous.IsZero() {
-					return errors.New("generated RDD cutoff is not canonical")
-				}
-			}
-			fields["rdd_mode"], _ = json.Marshal(profile.GlobalRDD)
-			fields["rdd_mode_recorded_at"], _ = json.Marshal(time.Now().UTC())
-			return nil
-		})
-		if err != nil {
+		if err := userStageJSON(ctx, root, "home/.gentle-ai", "state.json", userRDDUpdate(profile.GlobalRDD)); err != nil {
 			return err
 		}
 	}
@@ -63,6 +46,28 @@ func userStageContext7Shared(ctx context.Context, agent, choice string) error {
 		return privateError("preimage", nil)
 	}
 	return userStageJSON(ctx, agent, ".", "mcp.json", userContext7Update(choice))
+}
+
+// userRDDUpdate records the global RDD mode and its provenance time in
+// home/.gentle-ai/state.json, keeping every unrelated state key.
+func userRDDUpdate(choice string) func(map[string]json.RawMessage) error {
+	return func(fields map[string]json.RawMessage) error {
+		if raw, ok := fields["rdd_mode"]; ok {
+			var previous string
+			if json.Unmarshal(raw, &previous) != nil || (previous != "" && previous != "on" && previous != "off") {
+				return errors.New("generated RDD mode is not canonical")
+			}
+		}
+		if raw, ok := fields["rdd_mode_recorded_at"]; ok && string(raw) != "null" {
+			var previous time.Time
+			if json.Unmarshal(raw, &previous) != nil || previous.IsZero() {
+				return errors.New("generated RDD cutoff is not canonical")
+			}
+		}
+		fields["rdd_mode"], _ = json.Marshal(choice)
+		fields["rdd_mode_recorded_at"], _ = json.Marshal(time.Now().UTC())
+		return nil
+	}
 }
 
 func userContext7Update(choice string) func(map[string]json.RawMessage) error {

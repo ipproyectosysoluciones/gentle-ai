@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -42,8 +43,23 @@ func TestUserValidateAgentReuse(t *testing.T) {
 	main.SDKSource = "main-preview"
 	allowed := req
 	allowed.Experience = &main
+	// The Main SDK selection binds the agent as a private 0700 directory, so a
+	// 0755 agent is refused up front, before any write, with the exact fix.
+	before := agentTargetRecord(t, agent)
+	if err := userValidateInstall(allowed); err == nil || !strings.Contains(err.Error(), "Main preview") || !strings.Contains(err.Error(), "chmod 700 "+strconv.Quote(agent)) {
+		t.Fatalf("Main on a 0755 agent was not refused up front: %v", err)
+	}
+	if after := agentTargetRecord(t, agent); after != before {
+		t.Fatalf("refused Main selection changed the agent:\n%s\n->\n%s", before, after)
+	}
+	if err := os.Chmod(agent, 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := userValidateInstall(allowed); err != nil {
-		t.Fatalf("Main was refused for agent reuse: %v", err)
+		t.Fatalf("Main was refused for a 0700 agent reuse: %v", err)
+	}
+	if err := os.Chmod(agent, 0755); err != nil {
+		t.Fatal(err)
 	}
 	gga := profile
 	gga.GGA, gga.GGAProvider = "on", "codex"

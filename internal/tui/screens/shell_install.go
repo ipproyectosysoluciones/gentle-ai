@@ -46,6 +46,23 @@ func shellRoseCentered(line string, width int) string {
 	return strings.Repeat(" ", pad) + line
 }
 
+// shellFailedSteps keeps a failed run from rendering as complete: a refusal
+// reported after every step finished belongs to the final publish-and-verify
+// step, which is then shown as failed.
+func shellFailedSteps(steps []ShellInstallStep) []ShellInstallStep {
+	if len(steps) == 0 {
+		return steps
+	}
+	for _, step := range steps {
+		if step.State != "done" {
+			return steps
+		}
+	}
+	steps = append([]ShellInstallStep(nil), steps...)
+	steps[len(steps)-1].State = "failed"
+	return steps
+}
+
 func RenderShellInstall(steps []ShellInstallStep, failure string, done bool, frame, bloom int, destinationPublished, fallbackAvailable bool, mode, launchCommand string, width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
@@ -56,6 +73,7 @@ func RenderShellInstall(steps []ShellInstallStep, failure string, done bool, fra
 	}
 	if done && failure != "" {
 		title = "Installation failed"
+		steps = shellFailedSteps(steps)
 	}
 	completed := 0
 	for _, step := range steps {

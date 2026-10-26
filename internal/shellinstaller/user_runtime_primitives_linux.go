@@ -45,15 +45,23 @@ func privateCgroupPath(membership, mounts string) (string, error) {
 		if separator < 6 || len(fields) != separator+4 {
 			return "", privateError("unavailable", fmt.Errorf("mountinfo line %q has %d fields with the '-' separator at %d, want one '-' and four trailing fields", line, len(fields), separator))
 		}
-		mountRoot, rootOK := privateMountPath(fields[3])
+		// Only the mountpoint is consumed for every line: it classifies the
+		// entry against the trusted cgroup2 hierarchy. The root field is
+		// consumed solely by the trusted cgroup2 mount itself; unrelated
+		// mounts such as snapd's nsfs entries carry namespace identifiers
+		// like "mnt:[4026532518]" there (#5733), so their roots stay unread.
 		mountpoint, pointOK := privateMountPath(fields[4])
-		if !rootOK || !pointOK {
-			return "", privateError("unavailable", fmt.Errorf("mountinfo root %q or mountpoint %q is not canonical", mountRoot, mountpoint))
+		if !pointOK {
+			return "", privateError("unavailable", fmt.Errorf("mountinfo mountpoint %q is not canonical", fields[4]))
 		}
 		if strings.HasPrefix(mountpoint, trusted+"/") {
 			return "", privateError("unavailable", fmt.Errorf("mountpoint %q is underneath the trusted cgroup2 mountpoint", mountpoint))
 		}
 		if mountpoint == trusted {
+			mountRoot, rootOK := privateMountPath(fields[3])
+			if !rootOK {
+				return "", privateError("unavailable", fmt.Errorf("mountinfo root %q or mountpoint %q is not canonical", mountRoot, mountpoint))
+			}
 			if root != "" {
 				return "", privateError("unavailable", fmt.Errorf("trusted cgroup2 mount %q appears more than once", mountpoint))
 			}

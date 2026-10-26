@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,7 +16,10 @@ import (
 
 func managedInstallFixture(t *testing.T) (string, string) {
 	t.Helper()
-	home := t.TempDir()
+	if home, target, ok := platformManagedInstallFixture(t); ok {
+		return home, target
+	}
+	home := shellTestHome(t)
 	t.Setenv("HOME", home)
 	target := filepath.Join(home, ".local", "share", "gentle-shell", "install")
 	if err := os.MkdirAll(target, 0700); err != nil {
@@ -58,6 +62,7 @@ func addAgentInstall(t *testing.T, home string) string {
 }
 
 func TestShellManageAppliesSDKSourceAsPreference(t *testing.T) {
+	skipUnqualifiedMainPreview(t)
 	_, target := managedInstallFixture(t)
 	m := NewModel(system.DetectionResult{}, "detected").WithShellInstaller()
 	m.Width, m.Height = 120, 35
@@ -166,7 +171,7 @@ func TestShellUninstallSeparateKeepsBackup(t *testing.T) {
 	}
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyDown})  // Back is first; Uninstall is last.
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter}) // Uninstall.
-	if !m.shellManage.confirm || !strings.Contains(m.View(), "Uninstall (keep backup)") {
+	if m.shellManage == nil || !m.shellManage.confirm || !strings.Contains(m.View(), "Uninstall (keep backup)") {
 		t.Fatalf("uninstall confirmation is missing:\n%s", m.View())
 	}
 	next, uninstallCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -198,6 +203,9 @@ func TestShellUninstallSeparateKeepsBackup(t *testing.T) {
 }
 
 func TestShellMultipleInstallsRequireChoice(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows discovers only the single LOCALAPPDATA Separate install and has no On my existing Pi mode, so two installs cannot coexist")
+	}
 	home, _ := managedInstallFixture(t)
 	agent := addAgentInstall(t, home)
 	installs := shellinstaller.DiscoverUserShellInstalls(home)
@@ -249,7 +257,7 @@ func TestShellDetectsManagedInstallAndManage(t *testing.T) {
 	m.Width, m.Height = 120, 35
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	if !strings.Contains(m.View(), "Found a managed Gentle-Shell installation") || !strings.Contains(m.View(), "Manage this installation") || !strings.Contains(m.View(), "~/.local/share/gentle-shell/install") {
+	if !strings.Contains(m.View(), "Found a managed Gentle-Shell installation") || !strings.Contains(m.View(), "Manage this installation") || !strings.Contains(m.View(), managedInstallDisplayTarget) {
 		t.Fatalf("detection screen is incomplete:\n%s", m.View())
 	}
 	if m.ShellInstallSelection().Confirmed {
@@ -296,6 +304,13 @@ func TestShellDetectsManagedInstallAndManage(t *testing.T) {
 	loaded, err := shellinstaller.LoadUserShellExperience(shellinstaller.UserShellInstall{Target: target, Mode: "separate"})
 	if err != nil || loaded.Persona != "neutral" {
 		t.Fatalf("persona was not applied in place: %+v %v", loaded, err)
+	}
+	if view := m.View(); !strings.Contains(view, "Preferences updated.") || !strings.Contains(view, "Enter: back to menu") {
+		t.Fatalf("applied summary differs:\n%s", view)
+	}
+	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Screen != ScreenWelcome || m.shellManage != nil || m.shellExperience != nil || m.shellInstallSelection.Confirmed {
+		t.Fatalf("Enter after Preferences updated did not return to the menu: screen=%v manage=%+v experience=%+v", m.Screen, m.shellManage, m.shellExperience)
 	}
 }
 

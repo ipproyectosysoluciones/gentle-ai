@@ -5,10 +5,12 @@ package shellinstaller
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -74,7 +76,7 @@ func RecordUserShellInstall(home string, install UserShellInstall) error {
 	if err := os.Mkdir(state, 0700); err != nil && !os.IsExist(err) {
 		return err
 	}
-	if _, err := privateDirectory(state); err != nil {
+	if err := userShellStateDirectory(state); err != nil {
 		return err
 	}
 	installs := ReadUserShellInstalls(home)
@@ -97,6 +99,19 @@ func RecordUserShellInstall(home string, install UserShellInstall) error {
 		return err
 	}
 	return os.Rename(temporary, userShellRegistryPath(home))
+}
+
+// userShellStateDirectory admits gentle-ai's shared state directory, which its
+// other writers create 0755: physical (no alias), owned by this user and not
+// writable by group or others. The registry file itself stays 0600.
+func userShellStateDirectory(path string) error {
+	info, err := os.Lstat(path)
+	canonical, canonicalErr := filepath.EvalSymlinks(path)
+	if err != nil || canonicalErr != nil || canonical != path || !info.IsDir() || info.Mode()&(os.ModeType|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != os.ModeDir ||
+		info.Mode().Perm()&0022 != 0 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
+		return errors.Join(err, canonicalErr, fmt.Errorf("registry directory %s must be an owned physical directory not writable by group or others", path))
+	}
+	return privateExtendedMetadata(path, info, false)
 }
 
 // RemoveUserShellInstall drops one target from discovery bookkeeping. It does
@@ -140,6 +155,13 @@ func DiscoverUserShellInstalls(home string) []UserShellInstall {
 	seen := map[string]bool{}
 	var installs []UserShellInstall
 	for _, candidate := range candidates {
+		// Manifests record the canonical destination; a HOME spelled through
+		// a symlink must resolve before the literal comparison below.
+		canonical, err := filepath.EvalSymlinks(candidate.Target)
+		if err != nil {
+			continue
+		}
+		candidate.Target = canonical
 		if seen[candidate.Target] || strings.Contains(filepath.Base(candidate.Target), ".replaced-") {
 			continue
 		}

@@ -54,6 +54,24 @@ func userMainSnapshot(ctx context.Context) (userSnapshotArtifact, []byte, error)
 	return userMainSnapshotUsing(ctx, client)
 }
 
+// userMainPublisherRefusal names what a publisher response failed on. GitHub
+// limits unauthenticated API calls per network, so 403/429 are reported as a
+// rate limit instead of an opaque refusal.
+func userMainPublisherRefusal(host string, response *http.Response, bound int64) error {
+	switch {
+	case response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("Main publisher %s returned HTTP %d: GitHub rate limit for unauthenticated requests from this network; retry later or install Stable", host, response.StatusCode)
+	case response.StatusCode != http.StatusOK:
+		return fmt.Errorf("Main publisher %s returned HTTP %d", host, response.StatusCode)
+	case response.ContentLength > bound:
+		return fmt.Errorf("Main publisher %s response exceeds %d bytes", host, bound)
+	}
+	if encoding := response.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
+		return fmt.Errorf("Main publisher %s used Content-Encoding %q", host, encoding)
+	}
+	return nil
+}
+
 // Client seam keeps the same fixed URLs; offline response DATA do not prove TLS.
 func userMainSnapshotUsing(ctx context.Context, client *http.Client) (userSnapshotArtifact, []byte, error) {
 	if ctx == nil {
@@ -77,8 +95,8 @@ func userMainSnapshotUsing(ctx context.Context, client *http.Client) (userSnapsh
 			return nil, err
 		}
 		defer func() { resultErr = errors.Join(resultErr, response.Body.Close()) }()
-		if response.StatusCode != http.StatusOK || response.ContentLength > bound || (response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity") {
-			return nil, errors.New("Main publisher status/encoding/bound refused")
+		if err := userMainPublisherRefusal(req.URL.Host, response, bound); err != nil {
+			return nil, err
 		}
 		data, err := io.ReadAll(io.LimitReader(response.Body, bound+1))
 		if err != nil || int64(len(data)) > bound {

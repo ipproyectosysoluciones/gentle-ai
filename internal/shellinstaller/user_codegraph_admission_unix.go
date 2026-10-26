@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"syscall"
 )
 
@@ -26,8 +25,8 @@ func userCodeGraphReadbackWithNode(ctx context.Context, root, node string) error
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return privateError("refused", errors.New("CodeGraph retained library requires Linux amd64"))
+	if !userCodeGraphPlatform() {
+		return privateError("refused", errors.New("CodeGraph retained library requires "+userCodeGraphPlatformName))
 	}
 	base := filepath.Join(root, "runtime/codegraph")
 	archives := make([][]byte, len(userCodeGraphSources))

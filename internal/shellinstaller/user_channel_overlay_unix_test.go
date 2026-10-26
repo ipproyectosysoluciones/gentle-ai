@@ -1,4 +1,7 @@
-//go:build linux || darwin
+//go:build (linux && amd64) || (darwin && arm64)
+
+// The overlay exists on Linux amd64 and macOS arm64, the two platforms that
+// carry the Main composition (user_channel_overlay_unix.go).
 
 package shellinstaller
 
@@ -8,61 +11,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
-
-// userUnixOverlayFixture extends the canonical install fixture with the
-// published Separate layout the overlay reads: the stock gentle-pi package,
-// the agent settings declaration and the retained runtime entries the
-// verifier seam stands in for.
-func userUnixOverlayFixture(t *testing.T) (string, userManifest) {
-	t.Helper()
-	root := t.TempDir()
-	manifest := userManifest{Schema: userSchema, Destination: root, Prefix: filepath.Join(root, "prefix"), Agent: filepath.Join(root, "agent"), Mode: "separate"}
-	writeInstallFixture(t, root, manifest)
-	file := func(relative, body string, mode os.FileMode) {
-		t.Helper()
-		name := filepath.Join(root, filepath.FromSlash(relative))
-		if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(name, []byte(body), mode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	file("prefix/lib/node_modules/gentle-pi/package.json", "stock package\n", 0o600)
-	file("prefix/lib/node_modules/gentle-pi/bin/gentle-shell.mjs", "stock shell entry\n", 0o600)
-	file("runtime/node/bin/node", "fixture Node, never executed\n", 0o700)
-	file("runtime/archives/fd", "fixture fd, never executed\n", 0o700)
-	settings := map[string]any{
-		"packages": []string{filepath.Join(root, "prefix/lib/node_modules/gentle-pi")},
-		"npmCommand": []string{
-			filepath.Join(root, "runtime/node/bin/node"),
-			filepath.Join(root, "runtime/node/lib/node_modules/npm/bin/npm-cli.js"),
-			"--prefix", filepath.Join(root, "prefix"),
-		},
-	}
-	encoded, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	file("agent/settings.json", string(encoded)+"\n", 0o600)
-	if err := os.Mkdir(filepath.Join(root, "home"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return root, manifest
-}
-
-// userUnixOverlayMainArtifact builds a frozen Main descriptor fixture.
-func userUnixOverlayMainArtifact(t *testing.T, commit string) userSnapshotArtifact {
-	t.Helper()
-	artifact, err := userMainDescriptor(commit, strings.Repeat("b", 64))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return artifact
-}
 
 // userUnixOverlaySeams stubs the overlay's verifier, acquisition and
 // provisioner actions. The stubs record their calls; the fixture tree never
@@ -103,36 +55,6 @@ func userUnixOverlaySeams(t *testing.T, artifact *userSnapshotArtifact, verifies
 
 func userUnixOverlayRequest(root, source string) UserInstallRequest {
 	return UserInstallRequest{Destination: root, Mode: "separate", Experience: &UserExperience{Persona: "gentleman", BackgroundSubagents: "on", SDKSource: source}}
-}
-
-func userUnixOverlaySettings(t *testing.T, root string) map[string]any {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, "agent", "settings.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document map[string]any
-	if err := json.Unmarshal(data, &document); err != nil {
-		t.Fatal(err)
-	}
-	return document
-}
-
-func userUnixOverlayPackages(t *testing.T, root string) []string {
-	t.Helper()
-	packages, ok := userUnixOverlaySettings(t, root)["packages"].([]any)
-	if !ok {
-		t.Fatalf("settings packages are not an array: %+v", userUnixOverlaySettings(t, root))
-	}
-	result := make([]string, 0, len(packages))
-	for _, entry := range packages {
-		text, ok := entry.(string)
-		if !ok {
-			t.Fatalf("settings package entry is not a plain string: %+v", entry)
-		}
-		result = append(result, text)
-	}
-	return result
 }
 
 // The stable -> Main overlay composes the fresh Main snapshot, flips the SDK
@@ -237,6 +159,11 @@ func TestUserUnixChannelOverlayMainToStable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The installed Main runtime carries the dependency link that
+	// materialize-main-sdk-runtime created.
+	if err := os.Symlink("../prefix/lib/node_modules", filepath.Join(root, "runtime", "node_modules")); err != nil {
+		t.Fatal(err)
+	}
 	verifies, snapshotCalls := 0, 0
 	var actions []string
 	userUnixOverlaySeams(t, nil, &verifies, &actions, &snapshotCalls)
@@ -267,7 +194,7 @@ func TestUserUnixChannelOverlayMainToStable(t *testing.T) {
 		t.Fatalf("manifest was not restored to stock: %+v", restored.MainSDK)
 	}
 	// The Main composition leaves only after the restored tree verifies.
-	for _, relative := range []string{"runtime/main", "runtime/main-source", "runtime/main-sdk"} {
+	for _, relative := range []string{"runtime/main", "runtime/main-source", "runtime/main-sdk", "runtime/node_modules"} {
 		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(relative))); !os.IsNotExist(err) {
 			t.Fatalf("Main composition survived the committed cleanup: %s %v", relative, err)
 		}
@@ -367,29 +294,143 @@ func TestUserUnixChannelOverlayRollback(t *testing.T) {
 	}
 }
 
-// An occupied Main composition path refuses before a single byte moves.
+// An occupied Main composition path, including the runtime/node_modules
+// dependency link, refuses before a single byte moves and is left untouched.
 func TestUserUnixChannelOverlayRefusesOccupiedComposition(t *testing.T) {
+	for _, relative := range userUnixOverlayMainPaths {
+		t.Run(relative, func(t *testing.T) {
+			root, _ := userUnixOverlayFixture(t)
+			t.Setenv("GENTLE_AI_RECONFIGURE_TARGET", root)
+			artifact := userUnixOverlayMainArtifact(t, strings.Repeat("a", 40))
+			verifies, snapshotCalls := 0, 0
+			var actions []string
+			userUnixOverlaySeams(t, &artifact, &verifies, &actions, &snapshotCalls)
+			occupied := filepath.Join(root, filepath.FromSlash(relative))
+			if relative == "runtime/node_modules" {
+				if err := os.Symlink("../prefix/lib/node_modules", occupied); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.MkdirAll(occupied, 0o700); err != nil {
+				t.Fatal(err)
+			}
+
+			_, applied, err := userUnixChannelOverlay(context.Background(), userUnixOverlayRequest(root, "main-preview"))
+			if err == nil || !applied {
+				t.Fatalf("occupied composition must refuse: applied=%v err=%v", applied, err)
+			}
+			if !strings.Contains(err.Error(), relative+" is already occupied") {
+				t.Fatalf("refusal lost the occupied path: %v", err)
+			}
+			if snapshotCalls != 0 || len(actions) != 0 {
+				t.Fatalf("refusal ran acquisition or composition: snapshotCalls=%d actions=%v", snapshotCalls, actions)
+			}
+			if packages := userUnixOverlayPackages(t, root); len(packages) != 1 || packages[0] != filepath.Join(root, "prefix/lib/node_modules/gentle-pi") {
+				t.Fatalf("refusal changed the settings declaration: %v", packages)
+			}
+			// The unwind never removes what the gate did not prove absent.
+			if _, statErr := os.Lstat(occupied); statErr != nil {
+				t.Fatalf("refusal removed the pre-existing %s: %v", relative, statErr)
+			}
+		})
+	}
+}
+
+// userUnixOverlayRealActions keeps the production composition and the
+// production installed-tree verification for Main manifests, and swaps only
+// the provisioner process for its filesystem emulator. The Stable verifier
+// (which runs the full stock readback through Node) stays a seam.
+func userUnixOverlayRealActions(t *testing.T, artifact userSnapshotArtifact, calls *[]string, reboundRefusals *int) {
+	t.Helper()
+	contract := userMainProvisionActions(t)
+	userUnixOverlayStubAcquire(t, artifact)
+	previousAction, previousVerify := userMainSDKAction, userUnixOverlayVerify
+	userMainSDKAction = userMainProvisionEmulator(t, contract, calls)
+	userUnixOverlayVerify = func(ctx context.Context, root string, manifest userManifest) error {
+		if manifest.MainSDK == nil {
+			return nil
+		}
+		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+			return err
+		}
+		if *reboundRefusals > 0 {
+			*reboundRefusals--
+			return errors.New("injected rebound verification refusal")
+		}
+		return nil
+	}
+	t.Cleanup(func() { userMainSDKAction, userUnixOverlayVerify = previousAction, previousVerify })
+}
+
+// Stable -> Main -> Stable -> Main on one installed Separate target with the
+// real composition and selected-SDK verification: each direction succeeds,
+// Main -> Stable leaves no Main residue, so the next switch is not blocked.
+func TestUserUnixChannelOverlayRealActionsRoundTrip(t *testing.T) {
 	root, _ := userUnixOverlayFixture(t)
 	t.Setenv("GENTLE_AI_RECONFIGURE_TARGET", root)
 	artifact := userUnixOverlayMainArtifact(t, strings.Repeat("a", 40))
-	verifies, snapshotCalls := 0, 0
-	var actions []string
-	userUnixOverlaySeams(t, &artifact, &verifies, &actions, &snapshotCalls)
-	if err := os.MkdirAll(filepath.Join(root, "runtime", "main-sdk"), 0o700); err != nil {
+	var calls []string
+	refusals := 0
+	userUnixOverlayRealActions(t, artifact, &calls, &refusals)
+	stock, main := filepath.Join(root, "prefix/lib/node_modules/gentle-pi"), filepath.Join(root, "runtime/main-sdk")
+	for round, source := range []string{"main-preview", "stable", "main-preview"} {
+		calls = nil
+		if _, applied, err := userUnixChannelOverlay(context.Background(), userUnixOverlayRequest(root, source)); err != nil || !applied {
+			t.Fatalf("round %d -> %s failed: applied=%v err=%v (actions %v)", round, source, applied, err, calls)
+		}
+		packages := userUnixOverlayPackages(t, root)
+		if source == "stable" {
+			// Only the integrity gate on the installed Main tree runs a Main
+			// action; the Stable commit verification is the stock seam.
+			if !slices.Equal(calls, []string{"verify-main-sdk-selected"}) || len(packages) != 1 || packages[0] != stock {
+				t.Fatalf("Main -> Stable differs: actions=%v packages=%v", calls, packages)
+			}
+			for _, relative := range userUnixOverlayMainPaths {
+				if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(relative))); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("Main residue survived Main -> Stable: %s (%v)", relative, statErr)
+				}
+			}
+			continue
+		}
+		want := []string{"materialize-main-sdk-source", "materialize-main-sdk-runtime", "verify-main-sdk-selected"}
+		if !slices.Equal(calls, want) || len(packages) != 1 || packages[0] != main {
+			t.Fatalf("Stable -> Main differs: actions=%v packages=%v", calls, packages)
+		}
+		if link, err := os.Readlink(filepath.Join(root, "runtime", "node_modules")); err != nil || link != "../prefix/lib/node_modules" {
+			t.Fatalf("Main dependency link missing after Stable -> Main: %q %v", link, err)
+		}
+	}
+}
+
+// A rebound verification refusal after the real composition unwinds every
+// Main path including runtime/node_modules; the retry then succeeds instead
+// of failing with "occupied path".
+func TestUserUnixChannelOverlayRealActionsRollbackAllowsRetry(t *testing.T) {
+	root, _ := userUnixOverlayFixture(t)
+	t.Setenv("GENTLE_AI_RECONFIGURE_TARGET", root)
+	artifact := userUnixOverlayMainArtifact(t, strings.Repeat("a", 40))
+	var calls []string
+	refusals := 1
+	userUnixOverlayRealActions(t, artifact, &calls, &refusals)
+	settingsBefore, err := os.ReadFile(filepath.Join(root, "agent", "settings.json"))
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	_, applied, err := userUnixChannelOverlay(context.Background(), userUnixOverlayRequest(root, "main-preview"))
-	if err == nil || !applied {
-		t.Fatalf("occupied composition must refuse: applied=%v err=%v", applied, err)
+	if err == nil || !applied || !strings.Contains(err.Error(), "injected rebound verification refusal") {
+		t.Fatalf("rebound refusal not reported: applied=%v err=%v (actions %v)", applied, err, calls)
 	}
-	if !strings.Contains(err.Error(), "already occupied") {
-		t.Fatalf("refusal lost the occupied path: %v", err)
+	for _, relative := range userUnixOverlayMainPaths {
+		if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(relative))); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("overlay residue survived the rollback: %s (%v)", relative, statErr)
+		}
 	}
-	if snapshotCalls != 0 || len(actions) != 0 {
-		t.Fatalf("refusal ran acquisition or composition: snapshotCalls=%d actions=%v", snapshotCalls, actions)
+	if got, _ := os.ReadFile(filepath.Join(root, "agent", "settings.json")); string(got) != string(settingsBefore) {
+		t.Fatalf("settings bytes were not restored:\n%s", got)
 	}
-	if packages := userUnixOverlayPackages(t, root); len(packages) != 1 || packages[0] != filepath.Join(root, "prefix/lib/node_modules/gentle-pi") {
-		t.Fatalf("refusal changed the settings declaration: %v", packages)
+
+	calls = nil
+	if _, applied, err := userUnixChannelOverlay(context.Background(), userUnixOverlayRequest(root, "main-preview")); err != nil || !applied {
+		t.Fatalf("retry after rollback failed: applied=%v err=%v (actions %v)", applied, err, calls)
 	}
 }

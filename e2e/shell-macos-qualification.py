@@ -295,6 +295,35 @@ def residue(work):
     return sorted(found)
 
 
+def home_launcher(home, separate):
+    """The redirected HOME holds exactly the Separate launchers and their PATH line.
+
+    Separate installs publish ~/.local/bin/gentle-shell and, unless the name
+    is occupied, ~/.local/bin/gs, both pointing at the target's
+    bin/gentle-shell. The harness runs the installer with PATH=/usr/bin:/bin
+    and no SHELL, so ~/.local/bin is off that PATH and the startup file is
+    ~/.profile: it must hold exactly the one marked PATH line. Nothing else
+    may appear in HOME.
+    """
+    startup, line = '.profile', 'export PATH="$HOME/.local/bin:$PATH" # gentle-ai: gentle-shell launcher\n'
+    found = sorted(os.path.relpath(os.path.join(directory, name), home)
+                   for directory, names, files in os.walk(home) for name in names + files)
+    launchers = [entry for entry in ('.local/bin/gentle-shell', '.local/bin/gs') if entry in found]
+    expected = sorted(['.local', '.local/bin', startup] + launchers)
+    require('.local/bin/gentle-shell' in launchers and found == expected,
+            'redirected home holds more than the Separate launchers and %s: %s' % (startup, found[:8]))
+    profile = os.path.join(home, startup)
+    require(os.path.isfile(profile) and not os.path.islink(profile), '%s is not a regular file' % startup)
+    with open(profile, 'rb') as handle:
+        require(handle.read() == line.encode(), '%s does not hold exactly the marked PATH line' % startup)
+    target = os.path.join(os.path.realpath(separate), 'bin/gentle-shell')
+    for entry in launchers:
+        link = os.path.join(home, entry)
+        require(os.path.islink(link) and os.readlink(link) == target, '%s is not a symlink into the Separate target' % entry)
+    require(os.path.isfile(target) and os.access(target, os.X_OK), 'launcher target is not the executable Separate binding')
+    return launchers
+
+
 def real_home_snapshot(home):
     rows = {'.': sorted(os.listdir(home))}
     for relative in REAL_HOME_WATCH:
@@ -501,10 +530,11 @@ def qualify(context):
     require(not leftovers, 'stage or workspace residue: %s' % leftovers[:8])
     expected = ['conflict-agent', 'separate', 'shared', 'shared-agent', 'shared-prefix']
     require(sorted(os.listdir(context.work)) == expected, 'unexpected entries beside the targets')
-    for directory in [context.home, context.tmp] + [context.env[key] for key in ('XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME')]:
+    launcher = home_launcher(context.home, separate)
+    for directory in [context.tmp] + [context.env[key] for key in ('XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME')]:
         entries = os.listdir(directory)
         require(entries == [], 'redirected %s is not empty: %s' % (os.path.relpath(directory, context.root), sorted(entries)))
-    reached('residue', stageOrWorkspaceResidue=0)
+    reached('residue', stageOrWorkspaceResidue=0, homeLauncher=launcher)
 
     checkpoint('real-home')
     home_after = real_home_snapshot(real_home)

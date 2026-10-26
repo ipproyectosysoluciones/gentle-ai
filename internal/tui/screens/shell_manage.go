@@ -41,9 +41,9 @@ func RenderShellManage(target, mode string, preferences, components []ShellManag
 		lines = append(lines, "")
 	}
 	if len(components) > 0 {
-		lines = append(lines, styles.WarningStyle.Render("COMPONENT CHANGES (not applied here)"))
+		lines = append(lines, styles.WarningStyle.Render("COMPONENT CHANGES"))
 		lines = append(lines, changeLines(components)...)
-		lines = append(lines, detectedSubtleStyle.Render("These need a component update; changing preferences does not reinstall the stack."), "")
+		lines = append(lines, detectedSubtleStyle.Render("Update installation reinstalls the stack with every selected change."), "")
 	}
 	if applyErr != "" {
 		lines = append(lines, styles.ErrorStyle.Render(applyErr), "")
@@ -79,6 +79,7 @@ func RenderShellManage(target, mode string, preferences, components []ShellManag
 }
 
 // RenderShellUninstall asks for explicit confirmation and preserves the tree.
+// Before the uninstall applyErr is its refusal; after it, a completion note.
 func RenderShellUninstall(target, mode string, uninstalled, working bool, backup, applyErr string, cursor, width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
@@ -95,12 +96,21 @@ func RenderShellUninstall(target, mode string, uninstalled, working bool, backup
 		return strings.Join(lines, "\n")
 	}
 	if uninstalled {
-		lines = append(lines, styles.SuccessStyle.Render("Installation uninstalled."), detectedSubtleStyle.Render("Backup: "+backup), "", detectedSubtleStyle.Render("Enter: back to menu"))
+		lines = append(lines, styles.SuccessStyle.Render("Installation uninstalled."), detectedSubtleStyle.Render("Backup: "+backup))
+		// After a completed uninstall, applyErr is a completion note.
+		if applyErr != "" {
+			for _, line := range wrapShellExperienceConfigText("Note: "+applyErr, width-2) {
+				lines = append(lines, styles.WarningStyle.Render(line))
+			}
+		}
+		lines = append(lines, "", detectedSubtleStyle.Render("Enter: back to menu"))
 		return strings.Join(lines, "\n")
 	}
 	lines = append(lines, "This moves the target to a timestamped backup and removes it from detection.")
 	if mode == "agent" {
-		lines = append(lines, "Managed Pi settings/MCP are restored only if they are unchanged; otherwise uninstall aborts.", "Your projects are untouched.")
+		lines = append(lines, "Managed Pi settings/MCP are restored only if they are unchanged; otherwise uninstall aborts.",
+			"Pi's own fd/rg set aside at install are restored; one Pi replaced since is left as it is and its original is kept beside the backup.",
+			"Your projects are untouched.")
 	} else {
 		lines = append(lines, "Your personal Pi and projects are untouched.")
 	}

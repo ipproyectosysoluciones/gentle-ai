@@ -52,5 +52,11 @@ func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
 	if err != nil {
 		return UserInstallRequest{}, err
 	}
+	// The TUI hands the profile separately from the positional values, so the
+	// experience carries the channel authority exactly as inspection derives
+	// it: the parsed request is the request that was inspected and confirmed.
+	if profile != nil && profile.SDKSource == "main-preview" {
+		channel = userChannelMain
+	}
 	return UserInstallRequest{Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Channel: channel, Experience: profile}, nil
 }

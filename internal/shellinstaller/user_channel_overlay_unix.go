@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"syscall"
 )
 
@@ -46,15 +45,31 @@ var (
 		}
 		return artifact, nil
 	}
+	// Composition only: the provisioner's selection refuses a published tree,
+	// so the overlay flips the declaration itself and the commit verification
+	// (userVerifyInstalledGlobal) runs the same selected-SDK action as a fresh
+	// Main install.
 	userUnixOverlayCompose = func(ctx context.Context, root string, manifest userManifest, artifact userSnapshotArtifact) error {
-		for _, action := range []string{"materialize-main-sdk-source", "materialize-main-sdk-runtime", "verify-main-sdk-composition"} {
-			if err := userVerifyMainBindingsAction(ctx, root, root, manifest.Prefix, manifest.Agent, artifact, action); err != nil {
-				return err
-			}
-		}
-		return nil
+		return userMaterializeMainSDK(ctx, root, root, manifest.Prefix, manifest.Agent, artifact)
 	}
 )
+
+// userUnixOverlayMainPaths is every path the Main composition adds to a
+// Stable tree, in creation order: the acquired snapshot, its source, the
+// composed package and the runtime/node_modules dependency link that
+// materialize-main-sdk-runtime creates. The occupancy gate, the stable -> Main
+// unwind and the committed Main -> Stable cleanup all use this one list.
+var userUnixOverlayMainPaths = []string{"runtime/main", "runtime/main-source", "runtime/main-sdk", "runtime/node_modules"}
+
+// userUnixOverlayRemoveMain removes the Main composition paths in reverse
+// creation order. os.RemoveAll never follows the dependency symlink.
+func userUnixOverlayRemoveMain(root string) error {
+	var cause error
+	for index := len(userUnixOverlayMainPaths) - 1; index >= 0; index-- {
+		cause = errors.Join(cause, os.RemoveAll(filepath.Join(root, filepath.FromSlash(userUnixOverlayMainPaths[index]))))
+	}
+	return cause
+}
 
 // userUnixOverlayRollback unwinds compensated overlay mutations in reverse
 // order. Any undo failure is joined and reported; nothing is silently dropped.
@@ -85,9 +100,9 @@ func userUnixChannelOverlay(ctx context.Context, req UserInstallRequest) (result
 	if req.Experience == nil || userReconfigureTarget() != root {
 		return UserInstallResult{}, false, nil
 	}
-	// The Main composition runtime is a Linux amd64 qualification; every
-	// other platform keeps its existing full reconfigure flow untouched.
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+	// The Main composition runtime is qualified on Linux amd64 and macOS
+	// arm64; every other platform keeps its existing full reconfigure flow.
+	if !userMainPlatform() {
 		return UserInstallResult{}, false, nil
 	}
 	if _, statErr := os.Lstat(root); statErr != nil {
@@ -124,7 +139,7 @@ func userUnixChannelOverlay(ctx context.Context, req UserInstallRequest) (result
 	rollback := &userUnixOverlayRollback{}
 	rebound := manifest
 	committed := false
-	var cleanup []string
+	cleanup := false
 	defer func() {
 		if committed {
 			return
@@ -136,33 +151,8 @@ func userUnixChannelOverlay(ctx context.Context, req UserInstallRequest) (result
 	switch installed {
 	case "stable": // stable -> main
 		fmt.Fprintln(os.Stderr, "Unix install phase: channel-overlay stable -> main")
-		for _, relative := range []string{"runtime/main", "runtime/main-source", "runtime/main-sdk"} {
-			if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(relative))); !errors.Is(statErr, os.ErrNotExist) {
-				return UserInstallResult{}, true, errors.Join(statErr, fmt.Errorf("Unix channel overlay refused: %s is already occupied", relative))
-			}
-		}
-		// The gate proved these paths absent, so the unwind removes exactly
-		// what this overlay stages; the installed tree never held them.
-		rollback.push(func() error {
-			var cause error
-			for _, relative := range []string{"runtime/main-sdk", "runtime/main-source", "runtime/main"} {
-				cause = errors.Join(cause, os.RemoveAll(filepath.Join(root, filepath.FromSlash(relative))))
-			}
-			return cause
-		})
-		artifact, acquireErr := userUnixOverlayAcquire(ctx, root)
-		if acquireErr != nil {
-			return UserInstallResult{}, true, acquireErr
-		}
-		if composeErr := userUnixOverlayCompose(ctx, root, manifest, artifact); composeErr != nil {
-			return UserInstallResult{}, true, composeErr
-		}
-		if selectErr := userUnixOverlaySelectSDK(root, manifest, true, rollback); selectErr != nil {
-			return UserInstallResult{}, true, selectErr
-		}
-		rebound.MainSDK = &artifact
-		if rebindErr := userUnixOverlayRebindManifest(root, rebound, rollback); rebindErr != nil {
-			return UserInstallResult{}, true, rebindErr
+		if rebound, err = userUnixOverlayStableToMain(ctx, root, manifest, rollback); err != nil {
+			return UserInstallResult{}, true, err
 		}
 	case "main-preview": // main -> stable
 		fmt.Fprintln(os.Stderr, "Unix install phase: channel-overlay main -> stable")
@@ -173,7 +163,7 @@ func userUnixChannelOverlay(ctx context.Context, req UserInstallRequest) (result
 		if rebindErr := userUnixOverlayRebindManifest(root, rebound, rollback); rebindErr != nil {
 			return UserInstallResult{}, true, rebindErr
 		}
-		cleanup = []string{"runtime/main", "runtime/main-source", "runtime/main-sdk"}
+		cleanup = true
 	default:
 		return UserInstallResult{}, true, fmt.Errorf("Unix channel overlay refused: unknown installed channel %q", installed)
 	}
@@ -185,13 +175,44 @@ func userUnixChannelOverlay(ctx context.Context, req UserInstallRequest) (result
 		return UserInstallResult{}, true, fmt.Errorf("Unix channel overlay unwound: rebound tree verification failed: %w", err)
 	}
 	committed = true
-	for _, relative := range cleanup {
-		if removeErr := os.RemoveAll(filepath.Join(root, filepath.FromSlash(relative))); removeErr != nil {
+	if cleanup {
+		if removeErr := userUnixOverlayRemoveMain(root); removeErr != nil {
 			fmt.Fprintf(os.Stderr, "Unix channel overlay committed, but Main cleanup failed; overlay evidence remains in %q: %v\n", root, removeErr)
 		}
 	}
 	userRecordPublishedShell(rebound)
-	return UserInstallResult{root, manifest.Prefix, manifest.Agent, "channel-overlay"}, true, nil
+	return UserInstallResult{root, manifest.Prefix, manifest.Agent, "channel-overlay", ""}, true, nil
+}
+
+// userUnixOverlayStableToMain stages and composes the fresh Main snapshot,
+// flips the SDK declaration and rebinds the manifest. Every mutation is
+// registered on the rollback stack before the next step runs; the caller owns
+// the final verification and the unwind.
+func userUnixOverlayStableToMain(ctx context.Context, root string, manifest userManifest, rollback *userUnixOverlayRollback) (userManifest, error) {
+	for _, relative := range userUnixOverlayMainPaths {
+		if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(relative))); !errors.Is(statErr, os.ErrNotExist) {
+			return manifest, errors.Join(statErr, fmt.Errorf("Unix channel overlay refused: %s is already occupied", relative))
+		}
+	}
+	// The gate proved these paths absent, so the unwind removes exactly
+	// what this overlay stages; the installed tree never held them.
+	rollback.push(func() error { return userUnixOverlayRemoveMain(root) })
+	artifact, err := userUnixOverlayAcquire(ctx, root)
+	if err != nil {
+		return manifest, err
+	}
+	if err := userUnixOverlayCompose(ctx, root, manifest, artifact); err != nil {
+		return manifest, err
+	}
+	if err := userUnixOverlaySelectSDK(root, manifest, true, rollback); err != nil {
+		return manifest, err
+	}
+	rebound := manifest
+	rebound.MainSDK = &artifact
+	if err := userUnixOverlayRebindManifest(root, rebound, rollback); err != nil {
+		return manifest, err
+	}
+	return rebound, nil
 }
 
 // userUnixOverlaySelectSDK flips the agent's SDK declaration between the

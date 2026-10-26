@@ -13,6 +13,9 @@ const selectingSDK = action === 'select-main-sdk-package';
 const verifyingSelectedSDK = action === 'verify-main-sdk-selected';
 const mainRuntimeActions = ['materialize-main-sdk-runtime', 'verify-main-sdk-runtime', 'select-main-sdk-package', 'verify-main-sdk-selected'];
 const mainActions = ['verify-main-source', 'verify-main-sdk-source', 'materialize-main-sdk-source', 'verify-main-sdk-composition', ...mainRuntimeActions];
+// Main runtime placement and selection are qualified where the stock native
+// member is pinned for this POSIX flow: Linux amd64 and macOS arm64.
+const mainPlatform = (process.platform === 'linux' && process.arch === 'x64') || (process.platform === 'darwin' && process.arch === 'arm64');
 const uid = process.getuid();
 // npm materializes the acquired tree under the inherited login umask, which is
 // group-writable (0002) on common distros, and the audit below rejects every
@@ -344,7 +347,7 @@ if (action === 'restore') {
   const mainPackageRoot = path.join(finalRoot, 'runtime/main-sdk');
   let selectedAgentIdentity;
   if (selectingSDK || verifyingSelectedSDK) {
-    if (process.platform !== 'linux' || process.arch !== 'x64' || (mode !== 'separate' && mode !== 'agent') || prefix !== path.join(root, 'prefix') || (mode === 'separate' && agent !== path.join(root, 'agent')) || (mode === 'agent' && !path.isAbsolute(agent)) || finalPrefix !== path.join(finalRoot, 'prefix')) reject('Main SDK selection requires Linux amd64 Separate or agent reuse');
+    if (!mainPlatform || (mode !== 'separate' && mode !== 'agent') || prefix !== path.join(root, 'prefix') || (mode === 'separate' && agent !== path.join(root, 'agent')) || (mode === 'agent' && !path.isAbsolute(agent)) || finalPrefix !== path.join(finalRoot, 'prefix')) reject('Main SDK selection requires Linux amd64 or macOS arm64 Separate or agent reuse');
     selectedAgentIdentity = physical(agent, true);
     if (mode === 'agent' ? (selectedAgentIdentity.mode & 0o022) !== 0 : (selectedAgentIdentity.mode & 0o7777) !== 0o700) reject('Main SDK agent custody');
     const info = physical(settingsPath);
@@ -595,7 +598,7 @@ if (action === 'restore') {
         const writing = action === 'materialize-main-sdk-source';
         const runtime = mainRuntimeActions.includes(action);
         const writingRuntime = action === 'materialize-main-sdk-runtime';
-        if (runtime && (process.platform !== 'linux' || process.arch !== 'x64' || prefix !== path.join(root, 'prefix'))) reject('Main SDK runtime requires Linux amd64 private Separate');
+        if (runtime && (!mainPlatform || prefix !== path.join(root, 'prefix'))) reject('Main SDK runtime requires Linux amd64 or macOS arm64 private Separate');
         physical(path.dirname(composed), true);
         if (writing) absent(composed);
         const expected = new Map();
@@ -661,6 +664,9 @@ if (action === 'restore') {
           const nativeTarget = path.join(composed, '.gentle-ai');
           const dependency = path.join(root, 'runtime/node_modules');
           const linkText = '../prefix/lib/node_modules';
+          // Linux symlinks are always 0777; macOS records the creating umask,
+          // pinned to 022 above. Neither grants access through the link mode.
+          const linkMode = process.platform === 'darwin' ? 0o755 : 0o777;
           const dependencyTarget = modules; // Authenticated stock is hoisted here.
           physical(dependencyTarget, true);
           if (writingRuntime) {
@@ -696,7 +702,7 @@ if (action === 'restore') {
             sync(path.dirname(dependency));
           }
           const link = fs.lstatSync(dependency);
-          if (!link.isSymbolicLink() || link.uid !== uid || link.nlink !== 1 || (link.mode & 0o7777) !== 0o777 || fs.readlinkSync(dependency) !== linkText || fs.realpathSync(dependency) !== dependencyTarget) reject('Main SDK dependency binding differs');
+          if (!link.isSymbolicLink() || link.uid !== uid || link.nlink !== 1 || (link.mode & 0o7777) !== linkMode || fs.readlinkSync(dependency) !== linkText || fs.realpathSync(dependency) !== dependencyTarget) reject('Main SDK dependency binding differs');
           nativeState(nativeSource, true);
           for (const [name, content] of nativeMembers) {
             if (content !== null && !read(path.join(supplier, name)).equals(content)) reject('stock native changed during placement');

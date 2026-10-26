@@ -34,14 +34,15 @@ func shellInstallPlatformFlags(flags *flag.FlagSet, req *shellinstaller.UserInst
 	}
 }
 
+// ShellInstallArguments strips the profile before calling this and appends it
+// as --experience; the worker derives the Main channel from a main-preview
+// profile exactly as inspection does. A direct caller holding a profile gets
+// no values, so preferences never silently drop from the worker arguments.
 func shellEntryValues(req shellinstaller.UserInstallRequest) []string {
 	if req.Experience != nil {
-		return nil // Unsupported preferences must never become legacy worker arguments.
+		return nil
 	}
 	channel, _ := shellinstaller.UserInstallChannel(req.Channel) // Worker rejects invalid values.
-	if req.Experience != nil && req.Experience.SDKSource == "main-preview" {
-		channel = "main"
-	}
 	return []string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Confirmation, "--channel", channel}
 }
 

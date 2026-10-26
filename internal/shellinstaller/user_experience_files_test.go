@@ -1,6 +1,9 @@
 package shellinstaller
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestUserStageExperienceFilesCanonical(t *testing.T) {
 	for _, persona := range []string{"gentleman", "neutral", "unmanaged"} {
@@ -49,8 +52,6 @@ func TestUserStageExperienceFilesRefusals(t *testing.T) {
 		{"unknown persona", UserExperience{Persona: "custom", BackgroundSubagents: "on"}},
 		{"unknown background", UserExperience{Persona: "neutral", BackgroundSubagents: "inherit"}},
 		{"invalid RDD", UserExperience{Persona: "neutral", BackgroundSubagents: "off", GlobalRDD: "inherit"}},
-		{"explicit RDD on", UserExperience{Persona: "gentleman", BackgroundSubagents: "on", GlobalRDD: "on", SDKSource: "main-preview"}},
-		{"explicit RDD off", UserExperience{Persona: "unmanaged", BackgroundSubagents: "off", GlobalRDD: "off", SDKSource: "main-preview"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := tc.profile
@@ -61,5 +62,41 @@ func TestUserStageExperienceFilesRefusals(t *testing.T) {
 	}
 	if files, err := userStageExperienceFiles(nil); err != nil || files != nil {
 		t.Fatalf("nil legacy selection gained files: %v, %v", files, err)
+	}
+}
+
+// Main preview + explicit RDD: Windows stages it in parity with Stable (the
+// RDD state itself is written by the Windows stage writer, not as a config
+// file); every other platform keeps the authenticated-producer refusal.
+func TestUserStageExperienceFilesMainPreviewRDD(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		names   []string
+		profile UserExperience
+	}{
+		{"explicit RDD on", []string{"background-subagents.json", "persona.json"}, UserExperience{Persona: "gentleman", BackgroundSubagents: "on", GlobalRDD: "on", SDKSource: "main-preview"}},
+		{"explicit RDD off", []string{"background-subagents.json"}, UserExperience{Persona: "unmanaged", BackgroundSubagents: "off", GlobalRDD: "off", SDKSource: "main-preview"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := tc.profile
+			files, err := userStageExperienceFiles(&tc.profile)
+			if tc.profile != before {
+				t.Fatalf("staging changed the selection: %+v", tc.profile)
+			}
+			if runtime.GOOS != "windows" {
+				if err == nil || files != nil {
+					t.Fatalf("Main preview RDD admitted off Windows: %v, %v", files, err)
+				}
+				return
+			}
+			if err != nil || len(files) != len(tc.names) {
+				t.Fatalf("Windows Main preview RDD refused or files differ: %v, %v", files, err)
+			}
+			for index, name := range tc.names {
+				if files[index].name != name {
+					t.Fatalf("staged file %d = %q, want %q", index, files[index].name, name)
+				}
+			}
+		})
 	}
 }

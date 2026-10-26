@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+// userWindowsCleanupFixtureWrite writes one owned fixture file, creating its
+// parent directories first: the owned writer never creates parents, and a
+// missing parent surfaces as a misleading alias/reparse-point refusal.
+func userWindowsCleanupFixtureWrite(t *testing.T, root, relative string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(relative))
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(path, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func userWindowsCleanupFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -29,9 +43,7 @@ func userWindowsCleanupFixture(t *testing.T) string {
 		`agent/mcp.json`, `home/.gentle-ai/state.json`, `prefix/lib/x.js`,
 		`selection.json`, `manifest.json`,
 	} {
-		if err := userWindowsWrite(filepath.Join(root, relative), []byte("x")); err != nil {
-			t.Fatal(err)
-		}
+		userWindowsCleanupFixtureWrite(t, root, relative)
 	}
 	return root
 }
@@ -62,9 +74,7 @@ func TestUserWindowsEphemeralCleanupHandlesAbsentPaths(t *testing.T) {
 	if err := userWindowsPrivate(root); err != nil {
 		t.Fatal(err)
 	}
-	if err := userWindowsWrite(filepath.Join(root, "config", "persona.json"), []byte("x")); err != nil {
-		t.Fatal(err)
-	}
+	userWindowsCleanupFixtureWrite(t, root, `config/persona.json`)
 	if err := userWindowsEphemeralCleanup(root); err != nil {
 		t.Fatalf("cleanup of absent ephemeral paths failed: %v", err)
 	}
@@ -112,9 +122,7 @@ func userWindowsPruneFixture(t *testing.T) string {
 		`supervisor.exe`, `complete-generated-lock-sri.mjs`, `main.json`,
 		`home/go/pkg/mod/m`,
 	} {
-		if err := userWindowsWrite(filepath.Join(root, relative), []byte("x")); err != nil {
-			t.Fatal(err)
-		}
+		userWindowsCleanupFixtureWrite(t, root, relative)
 	}
 	return root
 }

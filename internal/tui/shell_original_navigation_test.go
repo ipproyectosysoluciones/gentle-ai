@@ -9,7 +9,7 @@ import (
 )
 
 func TestShellOriginalOrdinaryWelcomeDispatch(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", shellTestHome(t))
 	for label, want := range map[string]Screen{
 		"Start installation":         ScreenDetection,
 		"Configure models":           ScreenModelConfig,
@@ -61,7 +61,7 @@ func TestShellOriginalOrdinaryWelcomeDispatch(t *testing.T) {
 
 func TestShellOriginalMinimumMenuKeys(t *testing.T) {
 	for _, key := range []rune{'c', 'C', 'x', 'X'} {
-		m := experienceStart(t)
+		m := shellHostCodeGraph(t, experienceStart(t))
 		next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
 		got := next.(Model)
 		cancel := key == 'x' || key == 'X'

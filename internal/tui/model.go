@@ -656,6 +656,7 @@ type Model struct {
 	shellPlan             []string
 	shellPlanConfig       *shellExperienceConfig
 	shellPlanRequest      shellinstaller.UserInstallRequest
+	shellRootRisk         *shellRootRiskPrompt
 	shellInstallRun       *shellInstallRun
 	shellInstallEvents    <-chan shellInstallEvent
 	shellInstallRunner    func(context.Context, shellinstaller.UserInstallRequest, func(shellinstaller.UserInstallProgress)) error

@@ -3,6 +3,7 @@
 package shellinstaller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,42 +31,23 @@ func ApplyUserExperiencePreferences(install UserShellInstall, selected UserExper
 	if err := ensurePrivateDirectory(configDir); err != nil {
 		return err
 	}
-	policies := map[string]string{}
-	if selected.Persona != "" {
-		policies["persona.json"] = selected.Persona
+	// Config, RDD state and Context7 use the install stage writers, so an
+	// applied preference has the exact bytes gentle-pi consumes after install.
+	files, err := userExperienceConfigFiles(&selected)
+	if err != nil {
+		return err
 	}
-	if selected.BackgroundSubagents != "" {
-		policies["background-subagents.json"] = selected.BackgroundSubagents
-	}
-	if selected.StrictTDD != "" {
-		policies["strict-tdd.json"] = selected.StrictTDD
-	}
-	for name, value := range policies {
-		key := "mode"
-		if name != "persona.json" {
-			key = "policy"
-		}
-		data, err := json.Marshal(map[string]string{key: value})
-		if err != nil {
-			return err
-		}
-		if err := atomicPreferenceWrite(filepath.Join(configDir, name), data); err != nil {
+	for _, file := range files {
+		if err := atomicPreferenceWrite(filepath.Join(configDir, file.name), file.data); err != nil {
 			return err
 		}
 	}
+	ctx := context.Background()
 	if selected.GlobalRDD != "" {
-		path := filepath.Join(install.Target, "home/.gentle-ai/state.json")
-		if err := ensurePrivateDirectory(filepath.Dir(path)); err != nil {
+		if err := ensurePrivateDirectory(filepath.Join(install.Target, "home")); err != nil {
 			return err
 		}
-		if err := mergePreferenceObject(path, func(object map[string]json.RawMessage) error {
-			raw, err := json.Marshal(selected.GlobalRDD)
-			if err != nil {
-				return err
-			}
-			object["rdd_mode"] = raw
-			return nil
-		}); err != nil {
+		if err := userStageJSON(ctx, install.Target, "home/.gentle-ai", "state.json", userRDDUpdate(selected.GlobalRDD)); err != nil {
 			return err
 		}
 	}
@@ -74,29 +56,10 @@ func ApplyUserExperiencePreferences(install UserShellInstall, selected UserExper
 		if agent == "" {
 			agent = filepath.Join(install.Target, "agent")
 		}
-		path := filepath.Join(agent, "mcp.json")
-		if err := ensurePrivateDirectory(filepath.Dir(path)); err != nil {
+		if err := ensurePrivateDirectory(agent); err != nil {
 			return err
 		}
-		if err := mergePreferenceObject(path, func(object map[string]json.RawMessage) error {
-			servers := map[string]json.RawMessage{}
-			if raw, ok := object["mcpServers"]; ok {
-				if err := json.Unmarshal(raw, &servers); err != nil {
-					return err
-				}
-			}
-			enabled, err := json.Marshal(map[string]bool{"enabled": selected.Context7 == "on"})
-			if err != nil {
-				return err
-			}
-			servers["context7"] = enabled
-			encoded, err := json.Marshal(servers)
-			if err != nil {
-				return err
-			}
-			object["mcpServers"] = encoded
-			return nil
-		}); err != nil {
+		if err := userStageJSON(ctx, agent, ".", "mcp.json", userApplyContext7Update(selected.Context7)); err != nil {
 			return err
 		}
 	}
@@ -110,10 +73,33 @@ func ApplyUserExperiencePreferences(install UserShellInstall, selected UserExper
 		}
 	}
 	loaded, err := LoadUserShellExperience(install)
-	if err != nil || loaded.Persona != selected.Persona || loaded.BackgroundSubagents != selected.BackgroundSubagents || loaded.StrictTDD != selected.StrictTDD || loaded.GlobalRDD != selected.GlobalRDD || loaded.Context7 != selected.Context7 || (selected.SDKSource != "" && loaded.SDKSource != selected.SDKSource) {
+	// Unmanaged never claims persona.json, so the loader reports its contents.
+	if err != nil || (selected.Persona != "unmanaged" && loaded.Persona != selected.Persona) || loaded.BackgroundSubagents != selected.BackgroundSubagents || loaded.StrictTDD != selected.StrictTDD || loaded.GlobalRDD != selected.GlobalRDD || loaded.Context7 != selected.Context7 || (selected.SDKSource != "" && loaded.SDKSource != selected.SDKSource) {
 		return fmt.Errorf("preference readback differs: %w", err)
 	}
 	return nil
+}
+
+// Earlier Apply releases replaced the Context7 entry with a bare
+// {"enabled": bool}. That exact shape is repaired to the canonical entry; any
+// other foreign entry keeps the install writer's preimage refusal.
+func userApplyContext7Update(choice string) func(map[string]json.RawMessage) error {
+	return func(fields map[string]json.RawMessage) error {
+		if raw, ok := fields["mcpServers"]; ok {
+			servers, err := userStageJSONObject(raw)
+			if err != nil {
+				return err
+			}
+			if entry, ok := servers["context7"]; ok {
+				var legacy map[string]*bool
+				if json.Unmarshal(entry, &legacy) == nil && len(legacy) == 1 && legacy["enabled"] != nil {
+					delete(servers, "context7")
+					fields["mcpServers"], _ = json.Marshal(servers)
+				}
+			}
+		}
+		return userContext7Update(choice)(fields)
+	}
 }
 
 func ensurePrivateDirectory(path string) error {
@@ -161,23 +147,4 @@ func atomicPreferenceWrite(path string, data []byte) error {
 	}
 	defer dir.Close()
 	return dir.Sync()
-}
-
-func mergePreferenceObject(path string, update func(map[string]json.RawMessage) error) error {
-	object := map[string]json.RawMessage{}
-	if data, err := os.ReadFile(path); err == nil {
-		if len(data) > 1<<20 || json.Unmarshal(data, &object) != nil {
-			return errors.New("managed preference file is malformed")
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if err := update(object); err != nil {
-		return err
-	}
-	data, err := json.Marshal(object)
-	if err != nil {
-		return err
-	}
-	return atomicPreferenceWrite(path, data)
 }

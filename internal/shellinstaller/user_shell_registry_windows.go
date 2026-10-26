@@ -40,7 +40,13 @@ type UserPiDetection struct {
 	Detail  string
 }
 
-func DetectUserPi(string) UserPiDetection { return UserPiDetection{Problem: "missing"} }
+// UserWindowsSeparateOnly is the Windows refusal for every target except
+// Separate; detection reports it so the TUI names it from the first render.
+const UserWindowsSeparateOnly = "Windows supports Separate install only; existing Pi, configuration and bindings stay untouched."
+
+func DetectUserPi(string) UserPiDetection {
+	return UserPiDetection{Problem: "unsupported", Detail: UserWindowsSeparateOnly}
+}
 
 func windowsLocalAppData(home string) string {
 	if value := os.Getenv("LOCALAPPDATA"); value != "" {
@@ -82,7 +88,9 @@ func ReadUserShellInstalls(home string) []UserShellInstall { return DiscoverUser
 
 func loadWindowsJSON(path string, value any) (bool, error) {
 	data, err := userWindowsRead(path, 1<<20)
-	if os.IsNotExist(err) {
+	// userWindowsRead joins the OS errno with its custody refusal, which
+	// os.IsNotExist does not unwrap; only a truly absent file is optional.
+	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
@@ -140,8 +148,17 @@ func LoadUserShellExperience(install UserShellInstall) (UserExperience, error) {
 	if info, err := os.Stat(filepath.Join(install.Target, "runtime", "codegraph")); err == nil && info.IsDir() {
 		profile.CodeGraph = "on"
 	}
+	// Like Unix, the installed composition always names its SDK source: the
+	// retained selection is Stable unless it records the Main channel, and
+	// the persisted channel preference overrides it for this projection.
+	profile.SDKSource = "stable"
 	if install.Channel == "main" || install.Channel == "main-preview" {
 		profile.SDKSource = "main-preview"
+	} else if data, err := userWindowsRead(filepath.Join(install.Target, "selection.json"), 4096); err == nil {
+		var selection struct{ Channel string }
+		if json.Unmarshal(data, &selection) == nil && selection.Channel == "main" {
+			profile.SDKSource = "main-preview"
+		}
 	}
 	if data, err := userWindowsRead(userUpdateChannelPath(install.Target), 4096); err == nil {
 		if preferred, ok := userUpdateChannelFromBytes(data); ok {
@@ -406,7 +423,7 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		}
 		return update, nil
 	}
-	self, err := os.Executable()
+	self, err := userWindowsExecutable()
 	if err != nil {
 		return update, err
 	}

@@ -55,6 +55,20 @@ func TestUserExperienceSelectionRefusesUnsupportedProfileBeforeEffects(t *testin
 	profile := UserExperience{Persona: "gentleman", BackgroundSubagents: "on"}
 	profile.GGA, profile.GGAProvider = "on", "codex"
 	req := UserInstallRequest{Destination: target, Mode: "separate", Experience: &profile}
+	if runtime.GOOS == "windows" {
+		// GGA ON is qualified only on Linux amd64; Windows refuses it at
+		// admission, before the host gate or any filesystem effect.
+		for _, provider := range []string{"codex", ""} {
+			profile.GGAProvider = provider
+			if token, err := InspectUserInstall(req); err == nil || token != "" || !strings.Contains(err.Error(), "require a compatible installed runtime") {
+				t.Fatalf("Windows admitted GGA ON (provider %q): %q, %v", provider, token, err)
+			}
+		}
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			t.Fatalf("profile refusal changed destination: %v", err)
+		}
+		return
+	}
 	if token, err := InspectUserInstall(req); err != nil || token == "" {
 		t.Fatalf("qualified GGA profile was refused: %q, %v", token, err)
 	}

@@ -9,19 +9,11 @@ func userValidateStageExperience(profile *UserExperience) error {
 	if err := userValidateStagePreferences(profile); err != nil {
 		return err
 	}
-	if userQualifiedStockExperience(profile) {
+	if userQualifiedStockExperience(profile) || userQualifiedDarwinExperience(profile) {
 		return nil
 	}
 	if profile != nil && profile.SDKSource == "main-preview" && runtime.GOOS != "windows" {
 		return experienceError("Main SDK requires its authenticated runtime producer")
-	}
-	// The Windows Main channel stages base preferences natively, but an
-	// explicit global RDD needs the qualified stock distribution. Refuse the
-	// pairing here so the Windows stage writer never produces or writes
-	// config/persona/background bytes for it, matching the unix guard order
-	// where the Main channel check precedes every write.
-	if profile != nil && profile.SDKSource == "main-preview" && runtime.GOOS == "windows" && profile.GlobalRDD != "" {
-		return experienceError("Main preview does not stage an explicit global RDD; choose stock for an explicit RDD preference")
 	}
 	if profile != nil && profile.CodeGraph != "" && runtime.GOOS != "windows" {
 		return experienceError("explicit CodeGraph requires a qualified private library/runtime stage")

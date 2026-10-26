@@ -2,6 +2,7 @@ package shellinstaller
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,8 +80,17 @@ func TestUserStrictTDDExperienceGenericStageRefused(t *testing.T) {
 		}
 		profile.SDKSource = "main-preview" // Generic staging still cannot compose this SDK.
 		files, err := userStageExperienceFiles(&profile)
+		if runtime.GOOS == "windows" {
+			// The Windows installer stages the Main channel natively (#5644),
+			// including the explicit Strict TDD policy file.
+			assertStagedExperienceFiles(t, files, err, "background-subagents.json", "strict-tdd.json")
+			if !strings.Contains(string(files[1].data), `"policy": "`+choice+`"`) {
+				t.Fatalf("Windows Strict TDD policy differs: %s", files[1].data)
+			}
+			continue
+		}
 		if err == nil || files != nil || !strings.Contains(err.Error(), "Main SDK") {
-			t.Fatal("unqualified generic/Windows stage accepted choice", files, err)
+			t.Fatal("unqualified generic stage accepted choice", files, err)
 		}
 	}
 }

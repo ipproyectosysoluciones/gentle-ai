@@ -2,6 +2,7 @@ package shellinstaller
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -82,7 +83,12 @@ func TestUserContext7ExperienceRefusesUnsupportedStage(t *testing.T) {
 		if err := userExperienceSupported(&profile); err != nil {
 			t.Fatalf("qualified Main Context7 was refused: %v", err)
 		}
-		if files, err := userStageExperienceFiles(&profile); err == nil || files != nil || !strings.Contains(err.Error(), "Main SDK") {
+		files, err := userStageExperienceFiles(&profile)
+		if runtime.GOOS == "windows" {
+			// The Windows installer stages the Main channel natively (#5644);
+			// Context7 belongs to agent/mcp.json, never to a config file.
+			assertStagedExperienceFiles(t, files, err, "background-subagents.json")
+		} else if err == nil || files != nil || !strings.Contains(err.Error(), "Main SDK") {
 			t.Fatalf("unsupported MCP staging silently accepted: %v, %v", files, err)
 		}
 		identity := []string{"destination", "mode", "identity"}
