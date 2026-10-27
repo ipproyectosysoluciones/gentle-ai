@@ -33,9 +33,14 @@ type userWindowsManifest struct {
 	// Component pins recorded at install time. An empty pin on an otherwise
 	// valid manifest is the pre-pin legacy layout: the update check then
 	// reports the component as changed so the next update refreshes it.
-	SDKLockSHA, ToolsSHA, GoSHA string
-	CodeGraph                   bool `json:"codegraph,omitempty"`
-	CodeGraphSHA, Context7SHA   string
+	// Every pin is omitempty so a pre-pin manifest still re-serializes to its
+	// exact on-disk bytes, which userWindowsManifestRead requires.
+	SDKLockSHA   string `json:",omitempty"`
+	ToolsSHA     string `json:",omitempty"`
+	GoSHA        string `json:",omitempty"`
+	CodeGraph    bool   `json:"codegraph,omitempty"`
+	CodeGraphSHA string `json:",omitempty"`
+	Context7SHA  string `json:",omitempty"`
 }
 
 func UserKernelCheck() error {
