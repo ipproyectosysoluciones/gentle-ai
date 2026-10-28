@@ -16,9 +16,8 @@ import (
 
 func TestCustomAgents_NavigationAndSelection(t *testing.T) {
 	tempDir := t.TempDir()
-	homeBackup := os.Getenv("HOME")
-	defer os.Setenv("HOME", homeBackup)
-	os.Setenv("HOME", tempDir)
+	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir) // os.UserHomeDir resolves here on Windows
 
 	regDir := filepath.Join(tempDir, ".config", "gentle-ai")
 	if err := os.MkdirAll(regDir, 0755); err != nil {
@@ -81,6 +80,7 @@ func TestCustomAgents_NavigationAndSelection(t *testing.T) {
 func TestCustomAgents_DeleteExecution_Success(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir) // os.UserHomeDir resolves here on Windows
 
 	regDir := filepath.Join(tempDir, ".config", "gentle-ai")
 	if err := os.MkdirAll(regDir, 0755); err != nil {
@@ -143,6 +143,7 @@ func TestCustomAgents_DeleteExecution_Success(t *testing.T) {
 func TestCustomAgents_DeleteExecution_ErrorPreserved(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("HOME", tempDir)
+	t.Setenv("USERPROFILE", tempDir) // os.UserHomeDir resolves here on Windows
 
 	regDir := filepath.Join(tempDir, ".config", "gentle-ai")
 	if err := os.MkdirAll(regDir, 0755); err != nil {
