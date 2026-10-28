@@ -1,5 +1,6 @@
 // Portable VM fixtures for the Windows provisioner's version policy: latest
-// dist-tag resolution with dynamic lock pinning and a discovered native bundle
+// dist-tag resolution with dynamic lock pinning, the reviewed-supplier table
+// with its single fallback re-resolution, and a discovered native bundle
 // directory. They prove the validation helper logic, not an installed Windows
 // runtime. Adapted from the windows-provision-copy VM region pattern.
 import assert from 'node:assert/strict';
@@ -15,12 +16,13 @@ const provision = process.argv[2] ?? fileURLToPath(new URL('./provision-gentle-s
 const source = fs.readFileSync(provision, 'utf8');
 const refusal = message => { throw Error(`Windows provision refused: ${message}`); };
 
-// Static contract: no static version expectation survives anywhere in the
-// provisioner, and the root specs resolve npm's `latest` dist-tag at install time.
+// Static contract: no static root version survives in the provisioner; install
+// declares every root at npm's `latest` dist-tag (rootDeclaration, tested below)
+// and only gentle-pi is bound to the reviewed-supplier table.
 assert.ok(!source.includes('4.0.0'), 'static gentle-pi 4.0.0 pin removed');
 assert.ok(!source.includes("'gentle-pi': ["), 'no pinned [version, integrity] root entries remain');
 assert.ok(!source.includes('.gentle-ai/v'), 'hardcoded native version path removed');
-assert.ok(source.includes("Object.fromEntries(pins.map(name => [name, 'latest']))"), 'root specs resolve the latest dist-tag');
+assert.ok(source.includes("exclusive(path.join(source, 'package.json'), rootDeclaration(pins));"), 'install declares the roots through rootDeclaration');
 
 function extract(name) {
   const begin = `function ${name}(`;
@@ -32,10 +34,10 @@ function extract(name) {
   return source.slice(start, end + 2);
 }
 
-const sandbox = { fs, path, Buffer, console, setTimeout, reject: refusal };
+const sandbox = { fs, path, Buffer, console, setTimeout, reject: refusal, read: file => fs.readFileSync(file) };
 sandbox.digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 vm.createContext(sandbox);
-for (const name of ['rootAuthorities', 'stockNativeDirectory', 'stockNativeIntegrity']) {
+for (const name of ['exclusive', 'rootDeclaration', 'rewriteSupplierDeclaration', 'rootAuthorities', 'reviewedSuppliers', 'newestReviewedSupplier', 'supplierFallbackVersion', 'reviewedSupplierEntry', 'reviewedSupplierLock', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierSources']) {
   vm.runInContext(extract(name), sandbox, { filename: `${name}.vm.js` });
 }
 const run = (code, ...args) => vm.runInContext(code, sandbox, { filename: 'call.vm.js' })(...args);
@@ -121,6 +123,110 @@ for (const [name, integrity] of [
     assert.throws(() => run('(lock, list) => rootAuthorities(lock, list)', lock, names), /Windows provision refused: root SRI\/version/, `${name} integrity refused`);
   });
 }
+
+// Reviewed-supplier table: the Windows stock lane resolves gentle-pi only onto
+// reviewed releases; an unreviewed `latest` falls back once to the newest
+// reviewed version, and every listed-version deviation fails closed.
+scenario('reviewed-table-shape', () => {
+  const table = run('() => reviewedSuppliers()');
+  assert.ok(table['4.3.0'] && table['4.4.0'] && table['4.5.0'], 'reviewed 4.3.0/4.4.0/4.5.0 listed');
+  for (const [version, entry] of Object.entries(table)) {
+    assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, 'exact reviewed version');
+    assert.match(entry.integrity, /^sha512-[A-Za-z0-9+/]{86}==$/, 'entry binds the npm tarball SRI');
+    assert.match(entry.installer, /^[0-9a-f]{64}$/, 'entry binds the installer SHA-256');
+    assert.match(entry.binary, /^[0-9a-f]{64}$/, 'entry binds the binary SHA-256');
+  }
+});
+
+scenario('reviewed-latest-kept', () => {
+  const table = run('() => reviewedSuppliers()');
+  assert.deepEqual({ ...run('(version, integrity, table) => reviewedSupplierEntry(version, integrity, table)', '4.5.0', table['4.5.0'].integrity, table) }, { ...table['4.5.0'] }, 'reviewed version with matching integrity accepted');
+  assert.equal(run('(version, integrity, table) => supplierFallbackVersion(version, integrity, table)', '4.5.0', table['4.5.0'].integrity, table), null, 'no fallback when latest resolves a reviewed version');
+});
+
+scenario('unreviewed-latest-falls-back', () => {
+  const table = run('() => reviewedSuppliers()');
+  assert.equal(run('(version, integrity, table) => supplierFallbackVersion(version, integrity, table)', '4.6.0', sri('unreviewed'), table), '4.5.0', 'unreviewed latest falls back to the newest reviewed version');
+});
+
+scenario('listed-wrong-integrity-refused-no-fallback', () => {
+  const table = run('() => reviewedSuppliers()');
+  assert.equal(run('(version, integrity, table) => reviewedSupplierEntry(version, integrity, table)', '4.3.0', sri('tampered'), table), null, 'listed version with wrong lock integrity refused');
+  assert.equal(run('(version, integrity, table) => supplierFallbackVersion(version, integrity, table)', '4.3.0', sri('tampered'), table), null, 'listed version never falls back on an integrity deviation');
+});
+
+scenario('lock-gate-keeps-main-overlay-exemption', () => {
+  const table = run('() => reviewedSuppliers()');
+  const gate = '(action, mainOverlay, version, integrity, table) => reviewedSupplierLock(action, mainOverlay, version, integrity, table)';
+  // Main overlay/verify gentle-pi source is bound by the frozen Main ZIP, so an
+  // older stock lock (installed before its version was reviewed) stays verifiable.
+  for (const action of ['overlay', 'verify']) {
+    assert.doesNotThrow(() => run(gate, action, true, '4.2.0', sri('older'), table), `Main ${action} ignores the stock lock version`);
+  }
+  assert.throws(() => run(gate, 'verify', false, '4.2.0', sri('older'), table),
+    /Windows provision refused: stock native supplier source pin/, 'stable verify of an unreviewed lock refused');
+  assert.throws(() => run(gate, 'install', false, '4.3.0', sri('tampered'), table),
+    /Windows provision refused: stock native supplier source pin/, 'install of a listed version with a different SRI refused');
+  assert.doesNotThrow(() => run(gate, 'verify', false, '4.3.0', table['4.3.0'].integrity, table), 'stable verify of a reviewed 4.3.0 lock accepted');
+});
+
+scenario('supplier-digest-mismatch-refused', () => {
+  const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
+  fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(gentle, 'runtime'), { recursive: true });
+  fs.writeFileSync(path.join(gentle, 'scripts/gentle-ai-installer.mjs'), 'installer');
+  fs.writeFileSync(path.join(gentle, 'runtime/gentle-ai-binary.mjs'), 'binary');
+  const table = { '4.5.0': { integrity: sri('tarball'), installer: '0'.repeat(64), binary: '0'.repeat(64) } };
+  assert.throws(() => run('(gentle, version, table) => reviewedSupplierSources(gentle, version, table)', gentle, '4.5.0', table),
+    /Windows provision refused: stock native supplier source pin/, 'supplier digest mismatch refused');
+  assert.throws(() => run('(gentle, version, table) => reviewedSupplierSources(gentle, version, table)', gentle, '4.6.0', table),
+    /Windows provision refused: stock native supplier source pin/, 'unlisted version at the supplier check refused');
+});
+
+scenario('root-declaration-latest', () => {
+  const manifest = JSON.parse(run('(names) => rootDeclaration(names)', names));
+  assert.deepEqual(Object.keys(manifest), ['name', 'private', 'version', 'dependencies'], 'declaration shape unchanged');
+  assert.deepEqual(manifest.dependencies, Object.fromEntries(names.map(name => [name, 'latest'])), 'every root resolves the latest dist-tag');
+});
+
+scenario('fallback-rewrite-pins-gentle-pi-and-discards-lock', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-'));
+  fs.writeFileSync(path.join(directory, 'package.json'), run('(names) => rootDeclaration(names)', names));
+  fs.writeFileSync(path.join(directory, 'package-lock.json'), '{"lockfileVersion":3}');
+  run('(directory, names, fallback) => rewriteSupplierDeclaration(directory, names, fallback)', directory, names, '4.5.0');
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
+  assert.deepEqual(manifest.dependencies, Object.fromEntries(names.map(name => [name, name === 'gentle-pi' ? '4.5.0' : 'latest'])),
+    'gentle-pi pinned to the reviewed fallback, the other roots stay latest');
+  assert.equal(fs.existsSync(path.join(directory, 'package-lock.json')), false, 'generated lock discarded before re-resolution');
+});
+
+scenario('installer-mismatch-with-matching-binary-refused', () => {
+  const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
+  fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(gentle, 'runtime'), { recursive: true });
+  fs.writeFileSync(path.join(gentle, 'scripts/gentle-ai-installer.mjs'), 'tampered installer');
+  fs.writeFileSync(path.join(gentle, 'runtime/gentle-ai-binary.mjs'), 'binary');
+  const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+  const table = { '4.5.0': { integrity: sri('tarball'), installer: sha256('installer'), binary: sha256('binary') } };
+  assert.throws(() => run('(gentle, version, table) => reviewedSupplierSources(gentle, version, table)', gentle, '4.5.0', table),
+    /Windows provision refused: stock native supplier source pin/, 'installer digest mismatch refused even when the binary matches');
+});
+
+scenario('supplier-digest-match-accepted', () => {
+  const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
+  fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(gentle, 'runtime'), { recursive: true });
+  fs.writeFileSync(path.join(gentle, 'scripts/gentle-ai-installer.mjs'), 'installer');
+  fs.writeFileSync(path.join(gentle, 'runtime/gentle-ai-binary.mjs'), 'binary');
+  const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+  const table = { '4.5.0': { integrity: sri('tarball'), installer: sha256('installer'), binary: sha256('binary') } };
+  assert.doesNotThrow(() => run('(gentle, version, table) => reviewedSupplierSources(gentle, version, table)', gentle, '4.5.0', table), 'matching reviewed supplier digests accepted');
+});
+
+scenario('semver-ordering', () => {
+  assert.equal(run('(table) => newestReviewedSupplier(table)', { '4.9.0': {}, '4.10.0': {}, '4.2.0': {} }), '4.10.0', '4.10.0 sorts above 4.9.0');
+  assert.equal(run('(table) => newestReviewedSupplier(table)', run('() => reviewedSuppliers()')), '4.5.0', 'newest reviewed table entry selected');
+});
 
 function nativeFixture(version) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-'));
