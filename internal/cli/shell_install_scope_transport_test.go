@@ -1,0 +1,66 @@
+package cli
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+)
+
+// A component-scoped update binds the scope into the inspected confirmation,
+// so ShellInstallArguments must carry it to the worker entry verbatim; a
+// dropped scope makes the worker recompute a different token and refuse the
+// confirmed selection (#5789).
+func TestShellInstallArgumentsCarryUpdateScope(t *testing.T) {
+	profile := shellinstaller.UserExperience{Persona: "gentleman", BackgroundSubagents: "on"}
+	profile.SDKSource = "main-preview"
+	selection := ShellInstallSelection{
+		Request: shellinstaller.UserInstallRequest{
+			Destination:  t.TempDir() + "/target",
+			Mode:         "separate",
+			Scope:        shellinstaller.CanonicalUpdateScope([]string{shellinstaller.UserComponentContext7, shellinstaller.UserComponentSDK}),
+			Experience:   &profile,
+			Confirmation: "scope-transport-token",
+		},
+		Confirmed: true,
+	}
+	args := ShellInstallArguments(selection)
+	if len(args) == 0 {
+		t.Fatal("scoped selection produced no worker arguments")
+	}
+	parsed, err := shellinstaller.UserInstallFromEntry(args[1:])
+	if err != nil {
+		t.Fatalf("worker entry refused scoped arguments: %v", err)
+	}
+	if !reflect.DeepEqual(parsed, selection.Request) {
+		t.Fatalf("worker entry changed the confirmed request: got %+v, want %+v", parsed, selection.Request)
+	}
+}
+
+// An unscoped selection keeps the historical entry bytes exactly: no --scope
+// pair may appear.
+func TestShellInstallArgumentsOmitEmptyScope(t *testing.T) {
+	profile := shellinstaller.UserExperience{Persona: "unmanaged", BackgroundSubagents: "off"}
+	selection := ShellInstallSelection{
+		Request: shellinstaller.UserInstallRequest{
+			Destination:  t.TempDir() + "/target",
+			Mode:         "separate",
+			Experience:   &profile,
+			Confirmation: "plain-transport-token",
+		},
+		Confirmed: true,
+	}
+	args := ShellInstallArguments(selection)
+	for _, arg := range args {
+		if arg == "--scope" {
+			t.Fatalf("empty scope emitted a --scope pair: %q", args)
+		}
+	}
+	parsed, err := shellinstaller.UserInstallFromEntry(args[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parsed, selection.Request) {
+		t.Fatalf("unscoped entry changed the request: got %+v, want %+v", parsed, selection.Request)
+	}
+}
