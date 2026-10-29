@@ -110,7 +110,7 @@ func userReuseComponents(ctx context.Context, root string, req UserInstallReques
 		}
 	}
 	if scope.reused[UserComponentCodeGraph] && req.Experience != nil && req.Experience.CodeGraph == "on" {
-		if err := userReuseTree(ctx, filepath.Join(req.Destination, "runtime/codegraph"), filepath.Join(root, "runtime/codegraph")); err != nil {
+		if err := userReuseCodeGraphTree(ctx, filepath.Join(req.Destination, "runtime/codegraph"), filepath.Join(root, "runtime/codegraph")); err != nil {
 			return fmt.Errorf("CodeGraph reuse: %w", err)
 		}
 	}
@@ -133,4 +133,15 @@ func userReuseComponents(ctx context.Context, root string, req UserInstallReques
 		}
 	}
 	return nil
+}
+
+// userReuseCodeGraphTree reuses the installed CodeGraph runtime into the stage
+// without its generated command: userStageCodeGraphExecutable regenerates
+// bin/codegraph for the destination and creates bin exclusively, so a reused
+// copy would fail the update with "mkdirat bin: file exists".
+func userReuseCodeGraphTree(ctx context.Context, from, to string) error {
+	if err := userReuseTree(ctx, from, to); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(to, "bin"))
 }
