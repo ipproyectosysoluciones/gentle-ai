@@ -35,6 +35,13 @@ function extract(name) {
 }
 
 const sandbox = { fs, path, Buffer, console, setTimeout, reject: refusal, read: file => fs.readFileSync(file) };
+// The reviewed supplier list is loaded from the stage root: the fixture root
+// carries the repository's real list, so every table scenario exercises the
+// actual reviewed values the installer ships.
+const listFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-list-'));
+const listPath = path.join(listFixtureRoot, 'gentle-pi-suppliers.json');
+fs.copyFileSync(fileURLToPath(new URL('./gentle-pi-suppliers.json', import.meta.url)), listPath);
+sandbox.root = listFixtureRoot;
 sandbox.digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 vm.createContext(sandbox);
 for (const name of ['exclusive', 'rootDeclaration', 'rewriteSupplierDeclaration', 'rootAuthorities', 'reviewedSuppliers', 'newestReviewedSupplier', 'supplierFallbackVersion', 'reviewedSupplierEntry', 'reviewedSupplierLock', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierSources']) {
@@ -135,6 +142,67 @@ scenario('reviewed-table-shape', () => {
     assert.match(entry.integrity, /^sha512-[A-Za-z0-9+/]{86}==$/, 'entry binds the npm tarball SRI');
     assert.match(entry.installer, /^[0-9a-f]{64}$/, 'entry binds the installer SHA-256');
     assert.match(entry.binary, /^[0-9a-f]{64}$/, 'entry binds the binary SHA-256');
+  }
+});
+
+scenario('reviewed-list-values', () => {
+  // Independent literals: the staged list must carry exactly the reviewed
+  // 4.3.0/4.4.0/4.5.0 supplier bindings.
+  const table = run('() => reviewedSuppliers()');
+  assert.deepEqual(JSON.parse(JSON.stringify(table)), {
+    '4.3.0': { integrity: 'sha512-xXBEZaGqden4bblEPagQEnkF12L0JHhsPr1REBGvhSeDy6mbHDQmEvUU5ATr9lvWb7xsTOXV7gwnfq4U+z7lpA==', installer: '8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
+    '4.4.0': { integrity: 'sha512-NlBlDil1sNeoEXqpmT4DkgTCLv/KCZiGYG4ukzx2Z0PQm1+X8FZEtoFnb0eeO5mmgTkWly7vItgAhc9ApGVF0A==', installer: '37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
+    '4.5.0': { integrity: 'sha512-hw4W2hBvyGWPbPEpvAIgx4F+5IgQjZ1Yzhj159DRcbrvFBde3H8Jh9qKQF2EYTH7WcI+ixJqTXFF92pykOuXIg==', installer: '37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
+  }, 'staged list binds the reviewed 4.3.0/4.4.0/4.5.0 supplier values');
+});
+
+// The provisioner re-validates the staged list strictly: a foreign schema, a
+// non-semver key, a malformed SRI or digest, an unknown entry field, an empty
+// release set or a non-object shape all fail closed.
+const listMutations = {
+  'foreign-schema': list => { list.schema = 'other/v1'; },
+  'missing-schema': list => { delete list.schema; },
+  'missing-releases': list => { delete list.releases; },
+  'empty-releases': list => { list.releases = {}; },
+  'array-releases': list => { list.releases = []; },
+  'range-key': list => { list.releases['^4.6.0'] = list.releases['4.5.0']; delete list.releases['4.5.0']; },
+  'prerelease-key': list => { list.releases['4.6.0-beta.1'] = list.releases['4.5.0']; delete list.releases['4.5.0']; },
+  'wrong-sri-algorithm': list => { list.releases['4.5.0'].integrity = 'sha1-' + list.releases['4.5.0'].integrity.slice(7); },
+  'truncated-sri': list => { list.releases['4.5.0'].integrity = 'sha512-AAAA'; },
+  'nonroundtrip-sri': list => { const value = list.releases['4.5.0'].integrity; list.releases['4.5.0'].integrity = value.slice(0, 95) + 'B' + value.slice(96); },
+  'uppercase-installer-digest': list => { list.releases['4.5.0'].installer = list.releases['4.5.0'].installer.toUpperCase(); },
+  'short-binary-digest': list => { list.releases['4.5.0'].binary = list.releases['4.5.0'].binary.slice(1); },
+  'unknown-entry-field': list => { list.releases['4.5.0'].foreign = 'x'; },
+  'unknown-top-level-field': list => { list.foreign = 'x'; },
+  'array-entry': list => { list.releases['4.5.0'] = []; },
+};
+scenario('reviewed-list-refusals', () => {
+  const original = fs.readFileSync(listPath);
+  try {
+    for (const [name, mutate] of Object.entries(listMutations)) {
+      const list = JSON.parse(original);
+      mutate(list);
+      fs.writeFileSync(listPath, JSON.stringify(list));
+      assert.throws(() => run('() => reviewedSuppliers()'), /Windows provision refused: reviewed supplier list/, `${name} staged list refused`);
+    }
+    fs.writeFileSync(listPath, 'not json');
+    assert.throws(() => run('() => reviewedSuppliers()'), /Windows provision refused|Unexpected token/, 'malformed staged list refused');
+    fs.rmSync(listPath);
+    assert.throws(() => run('() => reviewedSuppliers()'), /ENOENT/, 'absent staged list refused');
+  } finally {
+    fs.writeFileSync(listPath, original);
+  }
+});
+
+// The staged list read is bounded at 256 KiB like the Go loader: trailing
+// whitespace keeps the JSON valid, so only the byte bound refuses it.
+scenario('reviewed-list-oversize-refused', () => {
+  const original = fs.readFileSync(listPath);
+  try {
+    fs.writeFileSync(listPath, Buffer.concat([original, Buffer.from(' '.repeat(262145))]));
+    assert.throws(() => run('() => reviewedSuppliers()'), /Windows provision refused: reviewed supplier list/, 'oversized staged list refused');
+  } finally {
+    fs.writeFileSync(listPath, original);
   }
 });
 

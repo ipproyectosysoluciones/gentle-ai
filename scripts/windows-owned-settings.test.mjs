@@ -101,7 +101,17 @@ const supplierStart = source.indexOf('// Stock supplier pins authorize installat
 assert.ok(supplierStart >= 0 && supplierStart < configStart, 'native authority region must exist');
 const tableBegin = 'function reviewedSuppliers(', tableAt = source.indexOf(tableBegin);
 assert.ok(tableAt >= 0, 'reviewedSuppliers helper present');
-const reviewedTable = vm.runInNewContext(`(${source.slice(tableAt, source.indexOf('\n}', tableAt) + 2)})()`, {});
+// The provisioner loads the reviewed list from its stage root: the installed
+// tree retains the list the Go worker wrote at install time, so the fixture
+// reads the real retained bytes.
+const stageRoot = path.dirname(path.resolve(process.argv[2]));
+const listPath = path.join(stageRoot, 'gentle-pi-suppliers.json');
+const listBytes = fs.readFileSync(listPath);
+const reviewedTable = vm.runInNewContext(`(${source.slice(tableAt, source.indexOf('\n}', tableAt) + 2)})()`, {
+  root: stageRoot, path, Buffer,
+  read(file) { assert.equal(file, listPath, 'only the retained supplier list is read'); return listBytes; },
+  reject(message) { throw Error(`Windows provision refused: ${message}`); },
+});
 const supplierBody = `${source.match(/^const mainOverlay = .*$/m)[0]}
 ${['reviewedSuppliers', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierSources'].map(name => {
   const begin = `function ${name}(`, at = source.indexOf(begin);
@@ -129,9 +139,10 @@ for (const [name, action, channel, want, resolvedVersion] of [
   try {
     await vm.runInNewContext(`(async () => {${supplierBody}})()`, {
       gentle: path.join(root, 'prefix/node_modules/gentle-pi'), selection: { Channel: channel }, action, path,
-      resolved: { 'gentle-pi': resolvedVersion },
+      root: stageRoot, Buffer, resolved: { 'gentle-pi': resolvedVersion },
       fs: { readdirSync: () => [`v${fixtureNativeVersion}`], lstatSync: () => ({ isDirectory: () => true }), existsSync: () => true },
       read(file) {
+        if (file === listPath) return listBytes;
         if (file.endsWith('.mjs')) supplierReads++;
         return Buffer.from(file.endsWith('integrity.json') ? JSON.stringify(nativeManifest) : file);
       },

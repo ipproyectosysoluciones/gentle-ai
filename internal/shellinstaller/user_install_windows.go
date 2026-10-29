@@ -721,6 +721,17 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err := userWindowsWrite(filepath.Join(stage, "provision.mjs"), helper); err != nil {
 		return result, err
 	}
+	// The selected reviewed supplier list: the same list authority this build
+	// just resolved (live repository copy with the embedded fallback) is
+	// written into the stage, so the provisioner reads exactly the list
+	// detection used, and the published installation retains it for verify.
+	_, listBytes, err := userSelectedReviewedListFunc(ctx)
+	if err != nil {
+		return result, err
+	}
+	if err := userWindowsWrite(filepath.Join(stage, "gentle-pi-suppliers.json"), listBytes); err != nil {
+		return result, err
+	}
 	lockHelper, err := assets.ReadPrivateHelper("complete-generated-lock-sri.mjs")
 	if err != nil {
 		return result, err

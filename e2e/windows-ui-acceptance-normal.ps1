@@ -39,7 +39,7 @@ foreach ($path in @('R:\', $work)) {
     }
 }
 # Gate above precedes all product operations. No SDK, network helper, or replacement installer here.
-if ((Get-FileHash -LiteralPath 'C:\lab-input\windows-owned-settings.test.mjs' -Algorithm SHA256).Hash.ToLowerInvariant() -cne 'b5a9f6db8859bd22f929e9cfc68a6a84bff5dd9ba78e21b1d41e4956d095b0ea') {
+if ((Get-FileHash -LiteralPath 'C:\lab-input\windows-owned-settings.test.mjs' -Algorithm SHA256).Hash.ToLowerInvariant() -cne '72e3c4685a9d240ca5e49f96a97008a7f4cb7f3fc21cae341e54fcfa3ca633ea') {
     throw 'Owned settings fixture digest differs; no product execution'
 }
 $channel = (Read-Bounded 'C:\lab-input\selected-channel.data-only.txt' 32).Trim()

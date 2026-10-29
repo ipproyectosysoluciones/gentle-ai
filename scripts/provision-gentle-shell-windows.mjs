@@ -35,16 +35,37 @@ if (selection.Channel === 'main') {
 // (see reviewedSuppliers): an unreviewed `latest` falls back once to the newest
 // reviewed release, and every listed-version deviation fails closed.
 const pins = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
-// Reviewed gentle-pi releases for the Windows stock lane. Each entry binds the
-// exact version to its npm tarball SRI (the lock's `integrity`) and to the
-// SHA-256 of the two native supplier files inside the package. Reviewing a new
-// release here is the only step that admits it; the root specs stay `latest`.
+// Reviewed gentle-pi releases for the Windows stock lane, loaded from the
+// stage list the Go worker writes (gentle-pi-suppliers.json, schema
+// gentle-shell-reviewed-suppliers/v1): the live repository copy when its
+// fetch and strict validation succeeded, otherwise the embedded copy. The
+// provisioner re-validates the staged bytes strictly and never widens them.
+// Each entry binds the exact version to its npm tarball SRI (the lock's
+// `integrity`) and to the SHA-256 of the two native supplier files inside the
+// package. Reviewing a new release is a one-line change to that JSON; the
+// root specs stay `latest`.
 function reviewedSuppliers() {
-  return {
-    '4.3.0': { integrity: 'sha512-xXBEZaGqden4bblEPagQEnkF12L0JHhsPr1REBGvhSeDy6mbHDQmEvUU5ATr9lvWb7xsTOXV7gwnfq4U+z7lpA==', installer: '8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
-    '4.4.0': { integrity: 'sha512-NlBlDil1sNeoEXqpmT4DkgTCLv/KCZiGYG4ukzx2Z0PQm1+X8FZEtoFnb0eeO5mmgTkWly7vItgAhc9ApGVF0A==', installer: '37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
-    '4.5.0': { integrity: 'sha512-hw4W2hBvyGWPbPEpvAIgx4F+5IgQjZ1Yzhj159DRcbrvFBde3H8Jh9qKQF2EYTH7WcI+ixJqTXFF92pykOuXIg==', installer: '37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
-  };
+  const raw = read(path.join(root, 'gentle-pi-suppliers.json'));
+  // The staged list read is bounded at 256 KiB, matching the Go loader's bound.
+  if (raw.length > 262144) reject('reviewed supplier list');
+  const list = JSON.parse(raw);
+  const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+  const sri = value => typeof value === 'string' && /^sha512-[A-Za-z0-9+/]{86}==$/.test(value) &&
+    Buffer.from(value.slice(7), 'base64').toString('base64') === value.slice(7);
+  if (list === null || typeof list !== 'object' || Array.isArray(list) || list.schema !== 'gentle-shell-reviewed-suppliers/v1' ||
+      list.releases === null || typeof list.releases !== 'object' || Array.isArray(list.releases)) reject('reviewed supplier list');
+  // Strict top-level shape: exactly the schema and releases fields, mirroring
+  // the Go decoder's DisallowUnknownFields.
+  if (Object.keys(list).sort().join(',') !== 'releases,schema') reject('reviewed supplier list');
+  const table = {};
+  for (const [version, entry] of Object.entries(list.releases)) {
+    if (!semver.test(version) || entry === null || typeof entry !== 'object' || Array.isArray(entry) ||
+        Object.keys(entry).sort().join(',') !== 'binary,installer,integrity' || !sri(entry.integrity) ||
+        !/^[0-9a-f]{64}$/.test(entry.installer) || !/^[0-9a-f]{64}$/.test(entry.binary)) reject('reviewed supplier list');
+    table[version] = entry;
+  }
+  if (Object.keys(table).length === 0) reject('reviewed supplier list');
+  return table;
 }
 // Newest reviewed version in semantic order (4.10.0 > 4.9.0): the fallback
 // target when npm's `latest` resolution is unreviewed.

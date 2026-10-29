@@ -413,7 +413,11 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		userShellDetail(ctx, 3, 5, "Reusing the installed global runtime")
 	}
 	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
-	for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", userInstallerSHA}, {"runtime/gentle-ai-binary.mjs", privateNativeResolverSHA}} {
+	installerSHA, resolverSHA, pinsErr := userStableSupplierPins()
+	if pinsErr != nil {
+		return result, pinsErr
+	}
+	for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", installerSHA}, {"runtime/gentle-ai-binary.mjs", resolverSHA}} {
 		if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
 			return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
 		}
@@ -699,9 +703,26 @@ func userRecover(ctx context.Context, args []string, stdout io.Writer) error {
 	return err
 }
 
-const userInstallerSHA = "8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470"
-const privateNativeResolverSHA = "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80"
 const privateNativeInvoke = `import {installGentleAi} from './scripts/gentle-ai-installer.mjs'; const packageRoot=process.cwd(); await installGentleAi({packageRoot});`
+
+// userStableSupplierPins returns the reviewed supplier file digests of the
+// frozen lock's gentle-pi version, read from the embedded reviewed supplier
+// list — the repository's only copy of the reviewed table.
+func userStableSupplierPins() (installer, resolver string, err error) {
+	version, err := userFrozenLockGentlePiVersion()
+	if err != nil {
+		return "", "", err
+	}
+	list, _, err := userEmbeddedReviewedList()
+	if err != nil {
+		return "", "", err
+	}
+	entry, ok := list.Releases[version]
+	if !ok {
+		return "", "", fmt.Errorf("reviewed supplier list has no entry for the frozen lock's gentle-pi %s", version)
+	}
+	return entry.Installer, entry.Binary, nil
+}
 
 // userWriteBootstrapHelpers writes the staged provisioning helpers. They are
 // needed by both the fresh Node bootstrap and a component-scoped reuse (the
