@@ -56,7 +56,7 @@ func TestUserInstallFromEntryOmitsEmptyScope(t *testing.T) {
 			t.Fatalf("malformed scope admitted: %q", extra)
 		}
 	}
-	for _, bad := range []string{"supervisor", "node,codegraph,node", "context7,codegraph", "unknown"} {
+	for _, bad := range []string{"node,codegraph,node", "context7,codegraph", "unknown"} {
 		if _, err := UserInstallFromEntry(append(append([]string(nil), args...), "--scope", bad)); err == nil {
 			t.Fatalf("non-canonical scope admitted: %q", bad)
 		}

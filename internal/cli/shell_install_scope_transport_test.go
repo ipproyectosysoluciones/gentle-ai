@@ -38,6 +38,33 @@ func TestShellInstallArgumentsCarryUpdateScope(t *testing.T) {
 	}
 }
 
+// After a gentle-ai upgrade, update detection reports the supervisor next to
+// the other changed components; the worker must receive that exact scope.
+func TestShellInstallArgumentsCarrySupervisorScope(t *testing.T) {
+	profile := shellinstaller.UserExperience{Persona: "gentleman", BackgroundSubagents: "on"}
+	selection := ShellInstallSelection{
+		Request: shellinstaller.UserInstallRequest{
+			Destination:  t.TempDir() + "/target",
+			Mode:         "separate",
+			Scope:        shellinstaller.CanonicalUpdateScope([]string{shellinstaller.UserComponentSupervisor, shellinstaller.UserComponentSDK}),
+			Experience:   &profile,
+			Confirmation: "supervisor-scope-token",
+		},
+		Confirmed: true,
+	}
+	args := ShellInstallArguments(selection)
+	if len(args) == 0 {
+		t.Fatal("supervisor scope produced no worker arguments")
+	}
+	parsed, err := shellinstaller.UserInstallFromEntry(args[1:])
+	if err != nil {
+		t.Fatalf("worker entry refused the detection scope: %v", err)
+	}
+	if !reflect.DeepEqual(parsed, selection.Request) {
+		t.Fatalf("worker entry changed the confirmed request: got %+v, want %+v", parsed, selection.Request)
+	}
+}
+
 // An unscoped selection keeps the historical entry bytes exactly: no --scope
 // pair may appear.
 func TestShellInstallArgumentsOmitEmptyScope(t *testing.T) {
