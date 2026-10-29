@@ -433,7 +433,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err = userNativeReadback(ctx, filepath.Join(pkg, ".gentle-ai")); err != nil {
 		return result, fmt.Errorf("native supplier readback: %w", err)
 	}
-	if err = userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode); err != nil {
+	if err = userPostNativeReadback(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode, scope, existing); err != nil {
 		return result, fmt.Errorf("post-native global readback: %w", err)
 	}
 	if req.Mode == "shared" && req.Experience != nil && !scope.reused[UserComponentContext7] {
@@ -939,6 +939,18 @@ func userProvisionAssets(ctx context.Context, root string, stage bool) error {
 		}
 	}
 	return nil
+}
+
+// userPostNativeReadback verifies the staged global tree after the native
+// supplier step. A reused Main preview SDK carries an agent that already
+// selects runtime/main-sdk, so it verifies that selection exactly as a fresh
+// Main composition does; the stock verify would refuse it with "selected
+// settings bindings changed". Every other stage verifies the stock package.
+func userPostNativeReadback(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string, scope userInstallScope, existing *userManifest) error {
+	if scope.reused[UserComponentSDK] && existing != nil && existing.MainSDK != nil {
+		return userMainSDKAction(ctx, root, finalRoot, prefix, agent, *existing.MainSDK, userMainSDKSelectedAction)
+	}
+	return userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, finalRoot, mode)
 }
 
 func userVerifyGlobal(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string) error {
