@@ -35,7 +35,13 @@ type userWindowsManifest struct {
 	// reports the component as changed so the next update refreshes it.
 	// Every pin is omitempty so a pre-pin manifest still re-serializes to its
 	// exact on-disk bytes, which userWindowsManifestRead requires.
-	SDKLockSHA   string `json:",omitempty"`
+	SDKLockSHA string `json:",omitempty"`
+	// SDKVersion records the exact gentle-pi version the staged generated lock
+	// resolved: the installed stable SDK version the update check compares
+	// against the newest reviewed release. An empty field is a pre-feature
+	// install reported outdated once. Main installs record the stock lock's
+	// version too; Main detection never reads it.
+	SDKVersion   string `json:",omitempty"`
 	ToolsSHA     string `json:",omitempty"`
 	GoSHA        string `json:",omitempty"`
 	CodeGraph    bool   `json:"codegraph,omitempty"`
@@ -827,7 +833,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil {
 		return result, err
 	}
-	manifest := userWindowsManifest{Schema: userWindowsSchema, Destination: req.Destination, SID: sid, Identity: stageIdentity, SupervisorSHA: userWindowsSHA(image), PrefixIdentity: prefixID, AgentIdentity: agentID, SelectionSHA: userWindowsSHA(selection), LockSHA: userWindowsSHA(lock)}
+	sdkVersion, err := userWindowsLockGentlePiVersion(lock)
+	if err != nil {
+		return result, err
+	}
+	manifest := userWindowsManifest{Schema: userWindowsSchema, Destination: req.Destination, SID: sid, Identity: stageIdentity, SupervisorSHA: userWindowsSHA(image), PrefixIdentity: prefixID, AgentIdentity: agentID, SelectionSHA: userWindowsSHA(selection), LockSHA: userWindowsSHA(lock), SDKVersion: sdkVersion}
 	if channel == "main" {
 		if !scope.reused[UserComponentSDK] {
 			manifest.MainCommit, manifest.MainArchiveSHA = strings.TrimPrefix(mainArtifact.Prefix, "gentle-shell-"), mainArtifact.SHA

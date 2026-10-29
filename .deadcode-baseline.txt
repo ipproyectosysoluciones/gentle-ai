@@ -206,8 +206,6 @@ internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSub
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
 internal/shellinstaller/user_reviewed_suppliers.go	userReviewedList.newestReviewedRelease
-internal/shellinstaller/user_reviewed_suppliers.go	userReviewedListVersionLess
-internal/shellinstaller/user_reviewed_suppliers.go	userReviewedVersionOlder
 internal/state/manifest.go	AppendJournal
 internal/state/manifest.go	ComputeBundleDigest
 internal/state/manifest.go	JournalPath

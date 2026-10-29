@@ -504,6 +504,11 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if manifest.SDKLockSHA, err = userSDKLockSHA(); err != nil {
 			return result, err
 		}
+		// Record the exact installed gentle-pi version: the stable update
+		// check compares it against this build's stable target.
+		if manifest.SDKVersion, err = userFrozenLockGentlePiVersion(); err != nil {
+			return result, err
+		}
 	}
 	if manifest.ToolsSHA, err = userToolsPinSHA(); err != nil {
 		return result, err
