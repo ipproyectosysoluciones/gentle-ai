@@ -919,11 +919,41 @@ def mvp_smoke(personal):
     manifest = install(target)
     require(manifest['Mode'] == 'separate', 'smoke installed a different mode')
     prefix = pathlib.Path(manifest['Prefix'])
-    require(run([str(target / 'bin/pi'), '--version']).strip() == '1.3.0', 'authenticated Pi version differs')
-    require(json.loads((prefix / 'lib/node_modules/gentle-pi/package.json').read_text())['version'] == '4.3.0', 'authenticated Gentle version differs')
-    native = prefix / 'lib/node_modules/gentle-pi/.gentle-ai/v4.2.0/gentle-ai'
-    require(hashlib.sha256(native.read_bytes()).hexdigest() == '9212c7b16ea9abfe93e3a16b29d8390e7762b5c07730cf05df1f3e7892ff96a4', 'authenticated native bytes differ')
-    require('4.2.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
+    # The generated lock records every root the install resolved at `latest`
+    # (gentle-pi pinned to its listed release): Pi's authenticated version is
+    # the one that lock pinned, not a frozen literal.
+    generated = json.loads((target / 'runtime/project/package-lock.json').read_text())
+    pi_version = run([str(target / 'bin/pi'), '--version']).strip()
+    require(pi_version == generated['packages']['node_modules/@earendil-works/pi-coding-agent']['version'], 'authenticated Pi version differs')
+    # Stable installs gentle-pi at the newest release of the staged reviewed
+    # list (S19), not a frozen version: authenticate the outcome against the
+    # list the install declared, its supplier files and the generated lock.
+    reviewed = json.loads((target / 'gentle-pi-suppliers.json').read_text())
+    require(reviewed.get('schema') == 'gentle-shell-reviewed-suppliers/v1' and reviewed.get('releases'), 'staged reviewed list differs')
+    semver = re.compile(r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
+    require(all(semver.fullmatch(version) and re.fullmatch(r'[0-9a-f]{64}', entry.get('installer', '')) and
+                re.fullmatch(r'[0-9a-f]{64}', entry.get('binary', '')) and
+                re.fullmatch(r'sha512-[A-Za-z0-9+/]{86}==', entry.get('integrity', ''))
+                for version, entry in reviewed['releases'].items()), 'staged reviewed list entry shape differs')
+    gentle_version = max(reviewed['releases'], key=lambda version: tuple(int(part) for part in version.split('.')))
+    gentle = json.loads((prefix / 'lib/node_modules/gentle-pi/package.json').read_text())
+    require(gentle.get('version') == gentle_version, 'installed Gentle is not the newest reviewed release')
+    gentle_entry = reviewed['releases'][gentle_version]
+    for relative, expected in [('scripts/gentle-ai-installer.mjs', gentle_entry['installer']),
+                               ('runtime/gentle-ai-binary.mjs', gentle_entry['binary'])]:
+        require(hashlib.sha256((prefix / 'lib/node_modules/gentle-pi' / relative).read_bytes()).hexdigest() == expected,
+                'reviewed supplier bytes differ')
+    require(generated['packages']['node_modules/gentle-pi']['integrity'] == gentle_entry['integrity'],
+            'locked Gentle SRI differs from the reviewed entry')
+    native_root = prefix / 'lib/node_modules/gentle-pi/.gentle-ai'
+    bundles = [item for item in native_root.iterdir() if item.is_dir() and semver.fullmatch(item.name[1:] or '')]
+    require(len(bundles) == 1, 'native bundle layout differs')
+    native = bundles[0] / 'gentle-ai'
+    native_manifest = json.loads((bundles[0] / 'integrity.json').read_text())
+    require(native_manifest.get('version') == bundles[0].name[1:] and
+            hashlib.sha256(native.read_bytes()).hexdigest() == native_manifest.get('binarySha256'),
+            'authenticated native bytes differ')
+    require(native_manifest['version'] in run([str(native), '--version']), 'authenticated native v4 did not execute')
     pty_status(pathlib.Path(SUPERVISOR), WORK / 'project', [SUPERVISOR, 'shell', 'install'], installer=target)
     for name in ['gentle-shell', 'pi']:
         pty_status(target / 'bin' / name, WORK / 'project', opening_only=True)
@@ -933,7 +963,7 @@ def mvp_smoke(personal):
     home_changes = home_preservation_violations(home_before, home_after, original_profile, target)
     require(not home_changes, 'personal agent or shell configuration changed beyond the launchers and PATH line: %s' % home_changes[:8])
     require((WORK / 'gofmt.data').is_file() and (WORK / 'gofmt.data').stat().st_size == 0, 'candidate source formatting differs')
-    REPORT.update(functionalReady=False, mvpSmoke={'outcome': 'PASS', 'sourceSHA': source, 'pi': '1.3.0', 'gentle': '4.3.0', 'native': '4.2.0', 'personalPiAndShellPreserved': True, 'coldInstallerTUI': 'deferred', 'fullJourney': 'deferred'})
+    REPORT.update(functionalReady=False, mvpSmoke={'outcome': 'PASS', 'sourceSHA': source, 'pi': pi_version, 'gentle': gentle_version, 'native': native_manifest['version'], 'personalPiAndShellPreserved': True, 'coldInstallerTUI': 'deferred', 'fullJourney': 'deferred'})
 
 
 def main():

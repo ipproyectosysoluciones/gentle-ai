@@ -26,6 +26,53 @@ const reject = message => { throw Error(`global provision refused: ${message}`);
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 const rootNames = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
+// Stable Separate private-global route (S19): gentle-pi is declared at the
+// exact newest release of the staged reviewed supplier list and the other
+// four roots at `latest`; the lock is generated at install time like Windows.
+const reviewedSeed = { name: 'gentle-shell-owned-seed', version: '1.0.0' };
+function rootDeclaration(target) {
+  const dependencies = Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? target : 'latest']));
+  return { name: reviewedSeed.name, version: reviewedSeed.version, private: true, dependencies };
+}
+// The staged reviewed supplier list (gentle-pi-suppliers.json, schema
+// gentle-shell-reviewed-suppliers/v1) is written by the Go worker from the
+// list authority its detection resolved. This re-validation never widens it:
+// each entry binds the exact version to its npm tarball SRI and to the SHA-256
+// of the two native supplier files inside the package. Returns null when the
+// stage carries no list: a legacy installation, or a Main preview install or
+// verify, which keep the frozen-lock route and its Go-side supplier
+// authentication exactly as before this feature.
+function readReviewedList() {
+  const listPath = path.join(root, 'gentle-pi-suppliers.json');
+  let raw;
+  try { raw = read(listPath); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  // The staged list read is bounded at 256 KiB, matching the Go loader's bound.
+  if (raw.length > 262144) reject('reviewed supplier list');
+  const list = JSON.parse(raw);
+  const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+  const sri = value => typeof value === 'string' && /^sha512-[A-Za-z0-9+/]{86}==$/.test(value) &&
+    Buffer.from(value.slice(7), 'base64').toString('base64') === value.slice(7);
+  if (list === null || typeof list !== 'object' || Array.isArray(list) || list.schema !== 'gentle-shell-reviewed-suppliers/v1' ||
+      list.releases === null || typeof list.releases !== 'object' || Array.isArray(list.releases)) reject('reviewed supplier list');
+  if (Object.keys(list).sort().join(',') !== 'releases,schema') reject('reviewed supplier list');
+  for (const [version, entry] of Object.entries(list.releases)) {
+    if (!semver.test(version) || entry === null || typeof entry !== 'object' || Array.isArray(entry) ||
+        Object.keys(entry).sort().join(',') !== 'binary,installer,integrity' || !sri(entry.integrity) ||
+        !/^[0-9a-f]{64}$/.test(entry.installer) || !/^[0-9a-f]{64}$/.test(entry.binary)) reject('reviewed supplier list');
+  }
+  if (Object.keys(list.releases).length === 0) reject('reviewed supplier list');
+  return list.releases;
+}
+// Newest reviewed version in semantic order (4.10.0 > 4.9.0): the exact
+// gentle-pi version the Stable install declares.
+function newestReviewedListVersion(table) {
+  const order = version => version.split('.').map(Number);
+  return Object.keys(table).sort((left, right) => {
+    const a = order(left), b = order(right);
+    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  }).at(-1);
+}
 function physical(absolute, directory = false) {
   if (!path.isAbsolute(absolute) || path.resolve(absolute) !== absolute || fs.realpathSync(absolute) !== absolute) reject('noncanonical path');
   const stat = fs.lstatSync(absolute);
@@ -220,51 +267,111 @@ if (action === 'restore') {
   if (mainActions.includes(action) && ((mode !== 'separate' && mode !== 'agent') || prior)) reject('Main preflight requires modern Separate or agent stock');
   if (prior) source = path.join(root, 'runtime/prior');
   const graphPath = prior ? priorGraph : path.join(state, 'global-graph.json');
-  const lockBytes = read(path.join(root, 'user-locks', prior ? 'prior' : 'modern', 'package-lock.json'));
-  const lock = JSON.parse(lockBytes);
-  const seed = lock.packages?.[''];
-  if (lock.lockfileVersion !== 3 || !lock.packages || Array.isArray(lock.packages) || !seed?.dependencies ||
-      lock.name !== seed.name || lock.version !== seed.version || typeof seed.name !== 'string' || !packageName.test(seed.name) ||
-      JSON.stringify(Object.keys(seed.dependencies).sort()) !== JSON.stringify([...rootNames].sort())) reject('frozen source lock');
-  const identities = new Map();
-  const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-  if (typeof seed.version !== 'string' || !versionPattern.test(seed.version)) reject('frozen seed version');
-  for (const [relative, entry] of Object.entries(lock.packages)) {
-    if (!relative) continue;
-    if (!/^node_modules\/(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:\/node_modules\/(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)*$/.test(relative)) reject('frozen lock path');
-    const name = relative.split('node_modules/').at(-1);
-    const version = typeof entry?.version === 'string' && versionPattern.exec(entry.version);
-    if (!entry || entry.link || (entry.name !== undefined && entry.name !== name) || !packageName.test(name) ||
-        !version || version[4]?.split('.').some(part => /^0[0-9]+$/.test(part))) reject('frozen package identity');
-    const canonical = `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${entry.version}.tgz`;
-    if (entry.resolved !== canonical || typeof entry.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(entry.integrity) ||
-        Buffer.from(entry.integrity.slice(7), 'base64').toString('base64') !== entry.integrity.slice(7)) reject('frozen source integrity');
-    const key = `${name}@${entry.version}`;
-    if (identities.has(key) && identities.get(key) !== entry.integrity) reject('ambiguous frozen identity');
-    identities.set(key, entry.integrity);
-  }
-  const pins = Object.fromEntries(rootNames.map(name => {
-    const entry = lock.packages[`node_modules/${name}`];
-    if (!entry || seed.dependencies[name] !== entry.version) reject('frozen root declaration');
-    return [name, [entry.version, entry.integrity]];
-  }));
-  if (prior && pins['@earendil-works/pi-coding-agent'][0] !== '0.99.2') reject('frozen coding profile');
-  if (prior && lock.packages['node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui']?.version !== '0.99.2') reject('prior nested TUI placement');
-  if (action === 'install') {
-    physical(agent, true);
-    snapshot(preparing);
-    for (const directory of (preparing ? [source] : [cache, source])) {
-      absent(directory);
-      fs.mkdirSync(directory, { mode: 0o700 });
-    }
-    writeExclusive(path.join(source, 'package.json'), `${JSON.stringify({ name: seed.name, version: seed.version, private: true, dependencies: seed.dependencies })}\n`);
-    writeExclusive(path.join(source, 'package-lock.json'), lockBytes);
-  }
   const lockPath = path.join(source, 'package-lock.json');
-  if (!read(lockPath).equals(lockBytes)) reject('selected frozen lock differs');
+  const reviewed = prior ? null : readReviewedList();
+  // Only the Stable channel takes the generated reviewed-list route: the Go
+  // worker stages the selected list into every Stable install stage and fails
+  // the install when it cannot, so an install stage without one is a Main
+  // preview request, which keeps the frozen modern lock's stock base exactly
+  // as before the route existed (S23/M4). A verify or Main action without a
+  // staged list is likewise a legacy installation or a Main tree, checked
+  // against its frozen lock as before, with supplier authentication enforced
+  // at the Go launch boundary against the embedded list entry (S23/M1).
+  const frozenLock = prior || reviewed === null;
+  const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  // Every per-package canonical-URL/SRI gate, shared by the frozen and the
+  // generated lock route. The refusal slugs name the route that produced
+  // them: the generated reviewed-list route never reports "frozen" (S23/L2).
+  function assertCanonicalPackages(lock, route) {
+    const identities = new Map();
+    for (const [relative, entry] of Object.entries(lock.packages)) {
+      if (!relative) continue;
+      if (!/^node_modules\/(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:\/node_modules\/(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)*$/.test(relative)) reject(`${route} lock path`);
+      const name = relative.split('node_modules/').at(-1);
+      const version = typeof entry?.version === 'string' && versionPattern.exec(entry.version);
+      if (!entry || entry.link || (entry.name !== undefined && entry.name !== name) || !packageName.test(name) ||
+          !version || version[4]?.split('.').some(part => /^0[0-9]+$/.test(part))) reject(`${route} package identity`);
+      const canonical = `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${entry.version}.tgz`;
+      if (entry.resolved !== canonical || typeof entry.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(entry.integrity) ||
+          Buffer.from(entry.integrity.slice(7), 'base64').toString('base64') !== entry.integrity.slice(7)) reject(`${route} source integrity`);
+      const key = `${name}@${entry.version}`;
+      if (identities.has(key) && identities.get(key) !== entry.integrity) reject(`ambiguous ${route} identity`);
+      identities.set(key, entry.integrity);
+    }
+  }
+  let lockBytes, lock, seed, pins;
+  if (frozenLock) {
+    lockBytes = read(path.join(root, 'user-locks', prior ? 'prior' : 'modern', 'package-lock.json'));
+    lock = JSON.parse(lockBytes);
+    seed = lock.packages?.[''];
+    if (lock.lockfileVersion !== 3 || !lock.packages || Array.isArray(lock.packages) || !seed?.dependencies ||
+        lock.name !== seed.name || lock.version !== seed.version || typeof seed.name !== 'string' || !packageName.test(seed.name) ||
+        JSON.stringify(Object.keys(seed.dependencies).sort()) !== JSON.stringify([...rootNames].sort())) reject('frozen source lock');
+    if (typeof seed.version !== 'string' || !versionPattern.test(seed.version)) reject('frozen seed version');
+    assertCanonicalPackages(lock, 'frozen');
+    pins = Object.fromEntries(rootNames.map(name => {
+      const entry = lock.packages[`node_modules/${name}`];
+      if (!entry || seed.dependencies[name] !== entry.version) reject('frozen root declaration');
+      return [name, [entry.version, entry.integrity]];
+    }));
+    if (prior && pins['@earendil-works/pi-coding-agent'][0] !== '0.99.2') reject('frozen coding profile');
+    if (prior && lock.packages['node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui']?.version !== '0.99.2') reject('prior nested TUI placement');
+    if (action === 'install') {
+      physical(agent, true);
+      snapshot(preparing);
+      for (const directory of (preparing ? [source] : [cache, source])) {
+        absent(directory);
+        fs.mkdirSync(directory, { mode: 0o700 });
+      }
+      writeExclusive(path.join(source, 'package.json'), `${JSON.stringify({ name: seed.name, version: seed.version, private: true, dependencies: seed.dependencies })}\n`);
+      writeExclusive(path.join(source, 'package-lock.json'), lockBytes);
+    }
+  } else {
+    // Generated-lock route (S19): declare gentle-pi at the exact newest listed
+    // release and the other roots at `latest`, resolve the lock at install
+    // time, and complete its SRI records like the Windows provisioner. An
+    // unknown `latest` never occurs for gentle-pi because it is pinned to a
+    // listed version; a listed version with a mismatch is refused below.
+    const target = newestReviewedListVersion(reviewed);
+    if (action === 'install') {
+      physical(agent, true);
+      snapshot(preparing);
+      for (const directory of [cache, source]) {
+        absent(directory);
+        fs.mkdirSync(directory, { mode: 0o700 });
+      }
+      writeExclusive(path.join(source, 'package.json'), `${JSON.stringify(rootDeclaration(target))}\n`);
+      stockNpm(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
+      const { completeFile } = await import(pathToFileURL(path.join(root, 'complete-generated-lock-sri.mjs')).href);
+      await completeFile(lockPath);
+    }
+    lockBytes = read(lockPath);
+    lock = JSON.parse(lockBytes);
+    seed = lock.packages?.[''];
+    if (lock.lockfileVersion !== 3 || !lock.packages || Array.isArray(lock.packages) || !seed?.dependencies ||
+        lock.name !== seed.name || lock.version !== seed.version || typeof seed.name !== 'string' || !packageName.test(seed.name) ||
+        JSON.stringify(Object.keys(seed.dependencies).sort()) !== JSON.stringify([...rootNames].sort())) reject('generated source lock');
+    if (typeof seed.version !== 'string' || !versionPattern.test(seed.version)) reject('generated seed version');
+    assertCanonicalPackages(lock, 'generated');
+    pins = Object.fromEntries(rootNames.map(name => {
+      const entry = lock.packages[`node_modules/${name}`];
+      if (!entry) reject('generated root declaration');
+      return [name, [entry.version, entry.integrity]];
+    }));
+    // The locked gentle-pi must be the declared listed release with the
+    // entry's exact npm tarball SRI, on install and on every later verify.
+    const listed = reviewed[pins['gentle-pi'][0]];
+    if (!listed || listed.integrity !== pins['gentle-pi'][1] ||
+        (action === 'install' && pins['gentle-pi'][0] !== target)) reject('stock supplier pin');
+  }
+  if (frozenLock && !read(lockPath).equals(lockBytes)) reject('selected frozen lock differs');
   if (action === 'install') {
-    stockNpm(['ci', '--install-strategy=shallow', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=3', '--registry=https://registry.npmjs.org/']);
-    if (!read(lockPath).equals(lockBytes)) reject('npm ci changed the frozen lock');
+    // The generated route resolves nothing new at ci time, so it mirrors the
+    // Windows flags; the frozen prior route keeps its conservative profile.
+    stockNpm(frozenLock
+      ? ['ci', '--install-strategy=shallow', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=3', '--registry=https://registry.npmjs.org/']
+      : ['ci', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
+    if (!read(lockPath).equals(lockBytes)) reject(frozenLock ? 'npm ci changed the frozen lock' : 'npm ci changed the generated lock');
   }
   const retainedRoot = path.join(source, '.gentle-shell-optional');
   const retainedManifest = path.join(source, '.gentle-shell-optional.json');
@@ -542,11 +649,22 @@ if (action === 'restore') {
     }
   }
   const supplier = path.join(modules, 'gentle-pi');
-  for (const [relative, expected] of [
-    ['scripts/gentle-ai-installer.mjs', '8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470'],
-    ['runtime/gentle-ai-binary.mjs', '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80'],
-  ]) {
-    if (digest(read(path.join(supplier, relative))) !== expected) reject('stock supplier pin');
+  // Reviewed supplier sources (S19): with the staged reviewed list — every
+  // Stable install this feature provisions stages one — the installed
+  // gentle-pi's supplier files must match its locked version's list entry
+  // before the supplier runs. A stage without a staged list (a Main preview
+  // install, or a legacy tree) keeps the frozen-lock route, whose supplier
+  // authentication the Go launch boundary enforces against the embedded list
+  // entry (S23/M1).
+  if (reviewed) {
+    const entry = reviewed[pins['gentle-pi'][0]];
+    if (!entry) reject('stock supplier pin');
+    for (const [relative, expected] of [
+      ['scripts/gentle-ai-installer.mjs', entry.installer],
+      ['runtime/gentle-ai-binary.mjs', entry.binary],
+    ]) {
+      if (digest(read(path.join(supplier, relative))) !== expected) reject('stock supplier pin');
+    }
   }
   nativeState();
   if (action === 'install' && !preparing) {

@@ -29,6 +29,14 @@ func userVerifyMainBindingsAction(ctx context.Context, root, finalRoot, prefix, 
 	return userCompareMainSource(ctx, root, artifact)
 }
 
+// userMainPreviewRequest reports whether the request selects the Main preview
+// SDK channel — the only channel that keeps the frozen modern lock's stock
+// base and never takes the generated reviewed-list route (S23/M4). It mirrors
+// userInstallMainSDK's channel condition.
+func userMainPreviewRequest(req UserInstallRequest) bool {
+	return req.Experience != nil && req.Experience.SDKSource == "main-preview"
+}
+
 // The confirmed worker owns acquisition and partial-stage cleanup. Stock stays
 // installed: only the private SDK declaration changes after authenticated DATA.
 func userInstallMainSDK(ctx context.Context, root, finalRoot, prefix, agent string, profile *UserExperience) (*userSnapshotArtifact, error) {

@@ -144,7 +144,9 @@ func userReuseComponents(ctx context.Context, root string, req UserInstallReques
 // userSDKReusePaths is every SDK-owned path of a recorded installation that
 // the post-native readback re-reads when the SDK is reused: the stock
 // acquisition and its prior cohort (provision-gentle-shell-private-global.mjs
-// :77,:221,:224-225), both global-graph seals (:83,:222,:631), and the Main
+// :77,:221,:224-225), both global-graph seals (:83,:222,:631), the staged
+// reviewed list the install provisioned with — the reuse verify's route and
+// supplier authority (gentle-pi-suppliers.json) — and the Main
 // preview composition - the retained archive is re-read by Go's own Main
 // custody readback (userReadMainArchive in user_main_custody_unix.go) and the
 // source, composed package and runtime/node_modules dependency link by the
@@ -156,6 +158,7 @@ var userSDKReusePaths = []string{
 	"runtime/prior",
 	"state/global-graph.json",
 	"state/prior-global-graph.json",
+	"gentle-pi-suppliers.json",
 	"runtime/main",
 	"runtime/main-source",
 	"runtime/main-sdk",

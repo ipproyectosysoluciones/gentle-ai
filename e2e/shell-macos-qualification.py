@@ -49,9 +49,12 @@ TOOL_PINS = {
     'fd': ('b67e1836c468e42e411984b56e52fa7abec08c2bd22c867398e7cc134aac5e12', 1334374, 'fd-v10.5.0-aarch64-apple-darwin/fd', 'fd 10.5.0'),
     'rg': ('3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4', 1764284, 'ripgrep-15.2.0-aarch64-apple-darwin/rg', 'ripgrep 15.2.0'),
 }
-PI_VERSION = '1.3.0'
 NODE_VERSION = 'v24.18.0'
-GENTLE_PI_VERSION = '4.3.0'
+# Stable installs gentle-pi at the newest release of the reviewed supplier
+# list (S19), not a frozen version: the expected version is read live from the
+# repository's list copy so a newly reviewed release needs no harness change.
+REVIEWED_SUPPLIERS = json.loads((pathlib.Path(__file__).resolve().parents[1] / 'scripts/gentle-pi-suppliers.json').read_text())['releases']
+GENTLE_PI_VERSION = max(REVIEWED_SUPPLIERS, key=lambda version: tuple(int(part) for part in version.split('.')))
 CODING_AGENT = 'lib/node_modules/@earendil-works/pi-coding-agent/package.json'
 GENTLE_AI_MEMBER = 'lib/node_modules/gentle-pi/.gentle-ai/v4.2.0/gentle-ai'
 RESIDUE_PREFIXES = ('.gentle-node-stage.', '.gentle-shell-stage.', '.gentle-user-', '.gentle-go-', '.gentle-native-', '.gentle-unit-')
@@ -232,14 +235,21 @@ def pinned(path, pin):
     return observed
 
 
+def lock_pi_version(target):
+    """The pi-coding-agent version the generated lock resolved at `latest`."""
+    with open(os.path.join(target, 'runtime/project/package-lock.json'), 'rb') as handle:
+        return json.loads(handle.read())['packages']['node_modules/@earendil-works/pi-coding-agent']['version']
+
+
 def launch_versions(context, target, label):
     pi, _ = context.run(label + '-pi-version', [os.path.join(target, 'bin/pi'), '--version'], PROBE_SECONDS)
-    version_line(pi, PI_VERSION)
+    expected_pi = lock_pi_version(target)
+    version_line(pi, expected_pi)
     shell, _ = context.run(label + '-gentle-shell-version', [os.path.join(target, 'bin/gentle-shell'), '--version'], PROBE_SECONDS)
-    version_line(shell, PI_VERSION)
+    version_line(shell, expected_pi)
     node, _ = context.run(label + '-node-version', [os.path.join(target, 'runtime/node/bin/node'), '--version'], PROBE_SECONDS)
     version_line(node, NODE_VERSION)
-    return {'pi': PI_VERSION, 'gentleShell': PI_VERSION, 'node': NODE_VERSION}
+    return {'pi': expected_pi, 'gentleShell': expected_pi, 'node': NODE_VERSION}
 
 
 def tool_evidence(context, target, agent, label):
@@ -461,7 +471,7 @@ def qualify(context):
     coding_agent = os.path.join(shared_prefix, CODING_AGENT)
     with open(coding_agent, 'rb') as handle:
         original_metadata = handle.read()
-    require(json.loads(original_metadata).get('version') == PI_VERSION, 'copied coding-agent version differs')
+    require(json.loads(original_metadata).get('version') == lock_pi_version(separate), 'copied coding-agent version differs')
     reached('shared-fixture')
 
     checkpoint('shared-fd-refusal')

@@ -210,3 +210,45 @@ for (const profile of ['modern', 'prior']) {
     });
   }
 }
+
+// A modern tree installed by the generated-lock route carries the staged
+// reviewed list; its verify takes the generated-lock route but must reach the
+// same caller-owned refusal. The frozen modern lock's gentle-pi (4.3.0) is
+// listed with its exact SRI, so the reviewed gates pass and the retained
+// evidence check still decides.
+for (const [scenario, retainedPath] of [
+  ['applicable optional', witnesses.modern.applicable],
+  ['selected root', 'node_modules/typebox'],
+]) {
+  test(`modern reviewed route: caller refuses retained ${scenario} before projection`, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'optional-projection-'));
+    fs.chmodSync(root, 0o700);
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const source = 'runtime/project';
+    const directories = ['state', 'agent', 'home', 'tmp', 'config', 'runtime/node/bin',
+      'runtime/node/lib/node_modules/npm/bin', 'user-locks/modern', source,
+      `${source}/.gentle-shell-optional`, 'prefix/lib/node_modules/@earendil-works/pi-coding-agent'];
+    for (const name of directories) fs.mkdirSync(path.join(root, name), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(process.execPath, path.join(root, 'runtime/node/bin/node'));
+    fs.chmodSync(path.join(root, 'runtime/node/bin/node'), 0o700);
+    fs.writeFileSync(path.join(root, 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'), 'throw Error("unexpected npm execution");');
+    fs.copyFileSync(new URL('../scripts/gentle-pi-suppliers.json', import.meta.url), path.join(root, 'gentle-pi-suppliers.json'));
+    const lockBytes = fs.readFileSync(new URL('../scripts/user-locks/modern/package-lock.json', import.meta.url));
+    fs.writeFileSync(path.join(root, 'user-locks/modern/package-lock.json'), lockBytes);
+    fs.writeFileSync(path.join(root, source, 'package-lock.json'), lockBytes);
+    fs.writeFileSync(path.join(root, 'prefix/lib/node_modules/@earendil-works/pi-coding-agent/package.json'),
+      JSON.stringify({ version: '1.3.0' }));
+    const emptyInventorySHA = crypto.createHash('sha256').update(JSON.stringify([['', 'dir', 0o700]])).digest('hex');
+    fs.writeFileSync(path.join(root, source, '.gentle-shell-optional.json'),
+      JSON.stringify({ paths: [retainedPath], sha256: emptyInventorySHA }));
+    const helper = new URL('../scripts/provision-gentle-shell-private-global.mjs', import.meta.url);
+    const prefix = path.join(root, 'prefix');
+    const result = spawnSync(process.execPath, [helper.pathname, root, prefix, path.join(root, 'agent'), prefix, root, 'separate', 'verify'], {
+      env: { HOME: path.join(root, 'home'), TMPDIR: path.join(root, 'tmp'), PATH: '/usr/bin:/bin' },
+      timeout: 10000, encoding: 'utf8', maxBuffer: 8192,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /retained acquisition is not locked nonapplicable optional/);
+    assert.equal(fs.existsSync(path.join(root, 'user-global-graph.mjs')), false);
+  });
+}

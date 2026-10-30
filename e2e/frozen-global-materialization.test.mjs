@@ -11,6 +11,16 @@ const scripts = fileURLToPath(new URL('../scripts/', import.meta.url));
 const copy = { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true };
 const npmExecutable = process.env.PATH.split(path.delimiter).map(dir => path.join(dir, 'npm')).find(file => fs.existsSync(file));
 const rebuildProof = { skip: npmExecutable ? false : 'stock npm unavailable for offline rebuild proof' };
+const reviewed = JSON.parse(fs.readFileSync(path.join(scripts, 'gentle-pi-suppliers.json'), 'utf8')).releases;
+function newestReviewedListVersion(table) {
+  const order = version => version.split('.').map(Number);
+  return Object.keys(table).sort((left, right) => {
+    const a = order(left), b = order(right);
+    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  }).at(-1);
+}
+const targetVersion = newestReviewedListVersion(reviewed);
+const rootNames = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
 function fixture(t, mode = 'separate', scenario = '') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'frozen-global-'));
   fs.chmodSync(root, 0o700);
@@ -26,6 +36,10 @@ function fixture(t, mode = 'separate', scenario = '') {
   fs.cpSync(path.dirname(path.dirname(stock)), npmRoot, copy);
   fs.renameSync(path.join(npmRoot, 'bin/npm-cli.js'), path.join(npmRoot, 'bin/stock-cli.cjs'));
   fs.copyFileSync(path.join(scripts, 'normalize-private-optional-platform-closure.mjs'), path.join(root, 'normalize-private-optional-platform-closure.mjs'));
+  // The Go worker stages the selected reviewed list and the lock-SRI
+  // completion helper into every install stage; the fixture mirrors that.
+  fs.copyFileSync(path.join(scripts, 'gentle-pi-suppliers.json'), path.join(root, 'gentle-pi-suppliers.json'));
+  fs.copyFileSync(path.join(scripts, 'complete-generated-lock-sri.mjs'), path.join(root, 'complete-generated-lock-sri.mjs'));
   for (const name of ['user.npmrc', 'global.npmrc']) fs.writeFileSync(path.join(root, 'config', name), '');
   const originalSettings = '{"theme":"kept"}\n';
   fs.writeFileSync(path.join(root, 'agent/settings.json'), originalSettings);
@@ -39,16 +53,25 @@ function fixture(t, mode = 'separate', scenario = '') {
     ...Object.entries(dependencies).map(([name, version]) => [`node_modules/${name}`, name, version]),
     [child, 'fixture-child', '1.0.0'],
   ]) {
-    lock.packages[relative] = { version, resolved: `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${version}.tgz`, integrity: `sha512-${Buffer.alloc(64).toString('base64')}` };
+    // The generated lock pins gentle-pi at the newest listed release.
+    const effectiveVersion = name === 'gentle-pi' ? targetVersion : version;
+    lock.packages[relative] = { version: effectiveVersion, resolved: `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${effectiveVersion}.tgz`, integrity: name === 'gentle-pi' ? reviewed[targetVersion].integrity : `sha512-${Buffer.alloc(64).toString('base64')}` };
     const directory = path.join(root, 'template', relative);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const command = name === 'gentle-pi' ? 'gentle-shell' : name === '@earendil-works/pi-coding-agent' ? 'pi' : name === 'fixture-child' ? 'fixture-child' : undefined;
-    const metadata = { name, version, ...(command ? { bin: { [command]: 'cli.js' } } : {}),
+    const metadata = { name, version: effectiveVersion, ...(command ? { bin: { [command]: 'cli.js' } } : {}),
       scripts: { install: 'node -e "require(\'node:fs\').writeFileSync(process.env.HOME+\'/hook-ran\',\'unexpected\')"' },
       ...(name === '@earendil-works/pi-coding-agent' ? { dependencies: { 'fixture-child': '1.0.0' } } : {}),
     };
     fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify(metadata));
     fs.writeFileSync(path.join(directory, 'cli.js'), '#!/usr/bin/env node\nconsole.log("fixture works");\n', { mode: 0o755 });
+    if (scenario === 'supplier-mismatch' && name === 'gentle-pi') {
+      // Supplier files whose bytes do not match the reviewed list entry.
+      fs.mkdirSync(path.join(directory, 'scripts'), { recursive: true, mode: 0o700 });
+      fs.mkdirSync(path.join(directory, 'runtime'), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(directory, 'scripts/gentle-ai-installer.mjs'), '// tampered supplier\n');
+      fs.writeFileSync(path.join(directory, 'runtime/gentle-ai-binary.mjs'), '// tampered supplier\n');
+    }
   }
   const nestedBins = path.join(root, 'template/node_modules/@earendil-works/pi-coding-agent/node_modules/.bin');
   fs.mkdirSync(nestedBins, { mode: 0o700 });
@@ -74,9 +97,20 @@ if (args[0] === 'ci') {
   if (${JSON.stringify(scenario)} === 'escaping-source') fs.symlinkSync(path.join(root,'agent/settings.json'), path.join(process.cwd(),'node_modules/gentle-pi/escape'));
   process.exit(0);
 }
+if (args[0] === 'install') {
+  const lock = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(root, 'user-locks/modern/package-lock.json'))}));
+  lock.packages[''].dependencies = ${JSON.stringify(Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? targetVersion : 'latest'])))};
+  const gentle = lock.packages['node_modules/gentle-pi'];
+  gentle.version = ${JSON.stringify(targetVersion)};
+  gentle.resolved = 'https://registry.npmjs.org/gentle-pi/-/gentle-pi-' + gentle.version + '.tgz';
+  gentle.integrity = ${JSON.stringify(reviewed[targetVersion].integrity)};
+  fs.writeFileSync(${JSON.stringify(path.join(root, 'runtime/project/package-lock.json'))}, JSON.stringify(lock));
+  process.exit(0);
+}
 if (${JSON.stringify(scenario)} === 'rebuild-failure') process.exit(74);
 const child = cp.spawnSync(process.execPath, [path.join(__dirname,'stock-cli.cjs'), ...args], {env:process.env, encoding:'utf8'});
 fs.writeFileSync(path.join(root,'stock-status.json'), JSON.stringify({status:child.status, signal:child.signal, error:child.error?.message, output:child.stdout+child.stderr}));
+if (${JSON.stringify(scenario)} === 'supplier-mismatch') process.exit(child.status ?? 1);
 process.exit(73);
 `);
   const result = spawnSync(process.execPath, [path.join(scripts, 'provision-gentle-shell-private-global.mjs'),
@@ -90,8 +124,9 @@ process.exit(73);
 for (const mode of ['separate', 'shared']) {
   test(`${mode} materializes the frozen tree and stock offline bins without hooks`, rebuildProof, t => {
     const f = fixture(t, mode);
-    assert.deepEqual(f.calls.map(args => args[0]), ['ci', 'rebuild'], f.result.stderr);
-    assert.ok(f.calls[1].includes('--global') && f.calls[1].includes('--offline') && f.calls[1].includes('--ignore-scripts'));
+    assert.deepEqual(f.calls.map(args => args[0]), ['install', 'ci', 'rebuild'], f.result.stderr);
+    assert.ok(f.calls[0].includes('--package-lock-only') && f.calls[0].includes('--min-release-age=0'));
+    assert.ok(f.calls[2].includes('--global') && f.calls[2].includes('--offline') && f.calls[2].includes('--ignore-scripts'));
     const stock = JSON.parse(fs.readFileSync(path.join(f.root, 'stock-status.json')));
     assert.equal(stock.status, 0, stock.output);
     assert.match(f.result.stderr, /stock npm rebuild failed; status=73/);
@@ -120,7 +155,7 @@ for (const mode of ['separate', 'shared']) {
 
 test('escaping source refuses before deployment or rebuild', rebuildProof, t => {
   const f = fixture(t, 'separate', 'escaping-source');
-  assert.deepEqual(f.calls.map(args => args[0]), ['ci'], f.result.stderr);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'ci'], f.result.stderr);
   assert.match(f.result.stderr, /inventory escaping link/);
   assert.equal(fs.existsSync(f.modules), false);
   assert.equal(fs.readFileSync(path.join(f.root, 'agent/settings.json'), 'utf8'), f.originalSettings);
@@ -128,7 +163,7 @@ test('escaping source refuses before deployment or rebuild', rebuildProof, t => 
 
 test('rebuild failure retains old, new and confirmed recovery evidence', rebuildProof, t => {
   const f = fixture(t, 'shared', 'rebuild-failure');
-  assert.deepEqual(f.calls.map(args => args[0]), ['ci', 'rebuild'], f.result.stderr);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'ci', 'rebuild'], f.result.stderr);
   assert.match(f.result.stderr, /stock npm rebuild failed; status=74/);
   const retained = fs.readdirSync(path.join(f.prefix, 'lib')).filter(name => name.startsWith('.gentle-shell-previous-'));
   assert.equal(retained.length, 1);
@@ -152,4 +187,12 @@ test('rebuild failure retains old, new and confirmed recovery evidence', rebuild
   assert.equal(fs.readFileSync(path.join(f.modules, '.package-lock.json'), 'utf8'), f.staleHidden);
   assert.equal(fs.statSync(path.join(f.modules, 'gentle-pi/.gentle-ai')).mode & 0o777, 0o700);
   assert.ok(fs.readdirSync(path.join(f.root, 'state')).some(name => name.startsWith('prefix.preimage.quarantine-')));
+});
+
+test('supplier bytes differing from the reviewed list entry refuse before the supplier runs', rebuildProof, t => {
+  const f = fixture(t, 'separate', 'supplier-mismatch');
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'ci', 'rebuild'], f.result.stderr);
+  assert.match(f.result.stderr, /stock supplier pin/);
+  assert.equal(fs.readFileSync(path.join(f.root, 'agent/settings.json'), 'utf8'), f.originalSettings);
+  assert.equal(fs.existsSync(path.join(f.root, 'home/hook-ran')), false);
 });
