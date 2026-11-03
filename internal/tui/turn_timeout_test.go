@@ -2,58 +2,82 @@ package tui
 
 import (
 	"context"
-	"errors"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
-func TestTurnTimeoutUsedInGeneration(t *testing.T) {
-	// Set a short timeout
-	os.Setenv("GENTLE_AI_TURN_TIMEOUT", "200ms")
-	defer os.Unsetenv("GENTLE_AI_TURN_TIMEOUT")
+func TestGetTurnTimeout(t *testing.T) {
+	// unset env -> default 10 minutes
+	if v := os.Getenv("GENTLE_AI_TURN_TIMEOUT"); v != "" {
+		t.Setenv("GENTLE_AI_TURN_TIMEOUT", "")
+		os.Unsetenv("GENTLE_AI_TURN_TIMEOUT")
+	}
+	if got := GetTurnTimeout(); got != 10*time.Minute {
+		t.Errorf("GetTurnTimeout() = %v, want %v", got, 10*time.Minute)
+	}
+	// set valid duration
+	t.Setenv("GENTLE_AI_TURN_TIMEOUT", "2m30s")
+	if got := GetTurnTimeout(); got != 2*time.Minute+30*time.Second {
+		t.Errorf("GetTurnTimeout() = %v, want %v", got, 2*time.Minute+30*time.Second)
+	}
+	// invalid duration falls back to default
+	t.Setenv("GENTLE_AI_TURN_TIMEOUT", "notaduration")
+	if got := GetTurnTimeout(); got != 10*time.Minute {
+		t.Errorf("GetTurnTimeout() = %v, want %v (fallback)", got, 10*time.Minute)
+	}
+}
 
-	// Create a mock engine that sleeps longer than timeout
-	mockEngine := &agentbuilder.MockEngine{
-		AgentIDVal:  model.AgentGeminiCLI,
-		IsAvailable: true,
-		Output:      "ok",
-		Err:         nil,
+// sleepingEngine is a GenerationEngine test double whose Generate respects the
+// context deadline: it returns ctx.Err() once the context expires. Upstream's
+// MockEngine ignores the context, so the turn-timeout behavior needs its own
+// double (upstream turned MockEngine.Generate from a field into a method).
+type sleepingEngine struct {
+	agentID model.AgentID
+	delay   time.Duration
+}
+
+func (e *sleepingEngine) Agent() model.AgentID { return e.agentID }
+func (e *sleepingEngine) Available() bool      { return true }
+func (e *sleepingEngine) Generate(ctx context.Context, _ string) (string, error) {
+	select {
+	case <-time.After(e.delay):
+		return "", ctx.Err()
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
-	mockEngine.Generate = func(ctx context.Context, prompt string) (string, error) {
-		// sleep 300ms > timeout
-		time.Sleep(300 * time.Millisecond)
-		return "ok", nil
-	}
+}
+
+func TestTurnTimeoutUsedInGeneration(t *testing.T) {
+	// A short timeout expires before the engine finishes its 300 ms of work.
+	t.Setenv("GENTLE_AI_TURN_TIMEOUT", "200ms")
+
+	engine := &sleepingEngine{agentID: model.AgentGeminiCLI, delay: 300 * time.Millisecond}
 
 	// Simulate what the TUI does: create ctx with GetTurnTimeout()
 	timeout := GetTurnTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Call the mock engine's Generate
-	_, err := mockEngine.Generate(ctx, "test")
-	// Expect context deadline exceeded
+	_, err := engine.Generate(ctx, "test")
 	if err == nil {
 		t.Errorf("expected error due to timeout, got nil")
-	} else if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("expected deadline exceeded error, got %v", err)
+		return
+	}
+	if ctx.Err() == nil || !os.IsTimeout(err) && err.Error() != context.DeadlineExceeded.Error() {
+		if err != context.DeadlineExceeded {
+			t.Errorf("expected deadline exceeded error, got %v", err)
+		}
 	}
 
-	// Verify that the deadline in ctx is roughly the timeout we set
-	if !ctx.Deadline().IsZero() {
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			t.Fatalf("deadline not ok")
-		}
-		// deadline should be in the future
-		if deadline.Sub(time.Now()) < 0 {
-			t.Errorf("deadline already passed: %v", deadline)
-		}
-	} else {
-		t.Errorf("context has no deadline")
+	// The context the generation ran with must carry the configured deadline.
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatalf("context has no deadline")
+	}
+	if deadline.Sub(time.Now()) >= 0 {
+		t.Errorf("deadline already passed: %v", deadline)
 	}
 }

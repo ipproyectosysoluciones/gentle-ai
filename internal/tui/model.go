@@ -1607,8 +1607,8 @@ func (m Model) View() string {
 	case ScreenComplete:
 		return screens.RenderComplete(screens.CompletePayload{
 			ConfiguredAgents:    len(m.Selection.Agents),
-			InstalledComponents: len(m.Selection.Components),
-			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA),
+			InstalledComponents: installedComponentCount(m.Selection.Components, m.Execution.DeferredComponents),
+			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA) && !slices.Contains(m.Execution.DeferredComponents, model.ComponentGGA),
 			FailedSteps:         extractFailedSteps(m.Execution),
 			RollbackPerformed:   len(m.Execution.Rollback.Steps) > 0,
 			RollbackComplete:    m.Execution.Rollback.Success,
@@ -4615,6 +4615,18 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 	return false
 }
 
+// installedComponentCount counts the selected components whose install was not
+// deferred for a missing prerequisite.
+func installedComponentCount(selected, deferred []model.ComponentID) int {
+	count := 0
+	for _, c := range selected {
+		if !slices.Contains(deferred, c) {
+			count++
+		}
+	}
+	return count
+}
+
 func (m Model) shouldShowUninstallEngramScopeSelection() bool {
 	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
 		return false
@@ -4841,7 +4853,7 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 		}()
 
 		turnTimeout := GetTurnTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 		defer cancel()
 		_ = ctx // timeout enforced; Install itself is synchronous
 

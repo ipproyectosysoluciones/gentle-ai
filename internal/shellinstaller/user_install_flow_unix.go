@@ -1238,7 +1238,10 @@ func userRecordedPin(ctx context.Context, root, relative, pin string) error {
 	if len(pin) != 64 {
 		return privateError("source", nil)
 	}
-	_, err := privateNativeFile(ctx, filepath.Join(root, relative), 0700, -1, pin)
+	// The pinned supervisor and node binaries are large; the stamp cache keeps
+	// the full privateNativeFile hash for starts where ctime proves the bytes
+	// unchanged (user_launch_pin_cache_unix.go).
+	_, err := userPinnedFileCached(ctx, root, relative, 0700, pin)
 	return err
 }
 
@@ -1276,6 +1279,9 @@ func userLaunchCommand(ctx context.Context, root string, manifest userManifest, 
 	// Read-only stock Git probes must not refresh the caller's index. Explicit
 	// Git writes still take their mandatory locks.
 	cmd.Env = append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
+	// Shared memory: only the outer entry's Engram decision, never caller env;
+	// a Separate launch without one runs with memory disabled.
+	cmd.Env = append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, userEngramContextEnv(ctx))...)
 	// GGA is retired from the shell installer: no runtime PATH is extended.
 	userCodeGraphLaunchEnv(root, manifest, cmd)
 	return cmd // Empty Dir inherits the caller's project, not the installer stage.
@@ -1296,6 +1302,7 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	userRootRiskBanner(stderr)
+	ctx = userEngramLaunchScope(ctx, root, args)
 	manifest, err := userReadManifest(ctx, root)
 	if err != nil {
 		return err
@@ -1304,8 +1311,16 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	if _, err := userSourceFile(ctx, cli, -1, ""); err != nil {
 		return userGraphRepairError(root, manifest.Mode, err)
 	}
-	if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
-		return userGraphRepairError(root, manifest.Mode, err)
+	// userReadManifest already proved the Main SDK graph for this exact launch
+	// (its reuse==nil path runs userVerifyInstalledGlobal for MainSDK) and only
+	// stat/read operations ran since; re-running the provisioner here doubled
+	// every launch's verification cost while leaving the unverified window at
+	// least as wide as the one it closed. Stock-only installs keep their single
+	// pre-exec verification, which only this call performs.
+	if manifest.MainSDK == nil {
+		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+			return userGraphRepairError(root, manifest.Mode, err)
+		}
 	}
 	// S23/M1: a tree without a staged reviewed list keeps its supplier files
 	// authenticated against the embedded entry on every launch.
