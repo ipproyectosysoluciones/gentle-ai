@@ -33,6 +33,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mcp"
@@ -2704,23 +2705,36 @@ func antigravityRulesSteps(id, homeDir, workspaceDir string, scope InstallScope,
 			if err != nil {
 				return nil, fmt.Errorf("publish Antigravity rules: %w", err)
 			}
-			migrated, err := antigravityrules.MigrateLegacyPrompt(baseDir, antigravityrules.GeminiCLIManaged(homeDir, agentIDs))
+			geminiCLIManaged := antigravityrules.GeminiCLIManaged(homeDir, agentIDs)
+			migrated, err := antigravityrules.MigrateLegacyPrompt(baseDir, geminiCLIManaged)
+			files := append(published.Files, migrated.Files...)
 			if err != nil {
-				return published.Files, fmt.Errorf("retire Antigravity sections from GEMINI.md: %w", err)
+				return files, fmt.Errorf("retire Antigravity sections from GEMINI.md: %w", err)
 			}
-			return append(published.Files, migrated.Files...), nil
+			if geminiCLIManaged {
+				return files, nil
+			}
+			// Without a managed Gemini CLI nothing imports the modules an
+			// earlier install published; they are Gentle AI's own leftovers.
+			retired, err := geminimodules.Retire(baseDir)
+			if err != nil {
+				return files, fmt.Errorf("retire Gemini CLI guidance modules: %w", err)
+			}
+			return append(files, retired.Files...), nil
 		},
 	}}
 }
 
 // antigravityRulesBackupPaths lists the rule files the publisher may write or
-// remove and the legacy GEMINI.md it may rewrite.
+// remove, the legacy GEMINI.md it may rewrite, and the Gemini CLI modules it
+// may retire.
 func antigravityRulesBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
 	if !containsAgent(agentIDs, model.AgentAntigravity) {
 		return nil
 	}
 	baseDir := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
-	return append(antigravityrules.ManagedPaths(baseDir), antigravityrules.LegacyPromptPath(baseDir))
+	paths := append(antigravityrules.ManagedPaths(baseDir), antigravityrules.LegacyPromptPath(baseDir))
+	return append(paths, geminimodules.ManagedPaths(baseDir)...)
 }
 
 type piCodeGraphReconcileStep struct {
