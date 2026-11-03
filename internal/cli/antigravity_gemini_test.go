@@ -121,8 +121,13 @@ func TestGeminiAndAntigravityKeepOnePersonaInAnyOrder(t *testing.T) {
 					}
 					continue
 				}
-				if n := personaCopies(string(data)); n != 1 {
-					t.Fatalf("after step %d GEMINI.md has %d persona copies, want 1:\n%s", i+1, n, data)
+				// Gemini CLI loads GEMINI.md plus the modules it imports.
+				guidance := string(data)
+				if strings.Contains(guidance, "<!-- gentle-ai:"+geminimodules.ImportSectionID+" -->") {
+					guidance += importedGuidance(t, home)
+				}
+				if n := personaCopies(guidance); n != 1 {
+					t.Fatalf("after step %d Gemini CLI guidance has %d persona copies, want 1:\n%s", i+1, n, guidance)
 				}
 			}
 		})
@@ -136,12 +141,11 @@ func TestGeminiAndAntigravityKeepOnePersonaInAnyOrder(t *testing.T) {
 func TestRunInstallAntigravityRetiresUnmanagedGeminiModules(t *testing.T) {
 	home := stubAntigravityHome(t, true)
 	dir := geminimodules.ModulesDir(home)
-	root := filemerge.InjectMarkdownSection(legacyGeminiUserContent, geminimodules.ImportSectionID, "@./gentle-ai/01-persona.md\n")
 	for path, content := range map[string]string{
-		geminimodules.StagingPath(home):     "persona\n",
-		filepath.Join(dir, "01-persona.md"): "persona\n",
-		filepath.Join(dir, "notes.md"):      "mine\n",
-		geminimodules.RootPath(home):        root,
+		geminimodules.StagingPath(home):  "persona\n",
+		filepath.Join(dir, "notes.md"):   "mine\n",
+		filepath.Join(dir, "99-mine.md"): "mine\n",
+		geminimodules.RootPath(home):     legacyGeminiUserContent,
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -149,6 +153,10 @@ func TestRunInstallAntigravityRetiresUnmanagedGeminiModules(t *testing.T) {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	if _, err := geminimodules.Publish(home); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err := RunInstall([]string{"--agent", "antigravity", "--component", "persona", "--component", "engram", "--component", "context7"}, macOSDetectionResult()); err != nil {
@@ -163,7 +171,9 @@ func TestRunInstallAntigravityRetiresUnmanagedGeminiModules(t *testing.T) {
 			t.Errorf("%s kept; stat err = %v", path, err)
 		}
 	}
-	if got := readString(t, filepath.Join(dir, "notes.md")); got != "mine\n" {
-		t.Fatalf("notes.md = %q, want untouched", got)
+	for _, name := range []string{"notes.md", "99-mine.md"} {
+		if got := readString(t, filepath.Join(dir, name)); got != "mine\n" {
+			t.Fatalf("%s = %q, want untouched", name, got)
+		}
 	}
 }
