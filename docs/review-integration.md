@@ -70,9 +70,9 @@ Git ownership refusals retain `git_repository_untrusted`; authority from a newer
 
 ## Atomic lifecycle
 
-### 1. Selectorless STATUS preflights only
+### 1. Selectorless STATUS selects the next step
 
-Selectorless STATUS evaluates only the current worktree candidate and renders one exact START invocation. It does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. The parent runs only the returned `next_transition` and its ordered tokens.
+Selectorless STATUS evaluates only the current candidate in the selected worktree. It normally renders one exact START invocation. A pending acknowledgement or, in v2, a reviewing recovery successor in the exact worktree-and-target START slot takes precedence. STATUS does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. After this preflight, the parent runs only the returned `next_transition` and its ordered tokens.
 
 #### START options through STATUS (`start_options_preflight`)
 
@@ -80,10 +80,10 @@ A parent that runs only provider-issued tokens passes the START options to the n
 
 - STATUS validates them with START's own rules (see the two sections below) before it reads the repository, and creates no authority. A refusal is a `not_started` `invalid_request` failure, and nothing is written.
 - When the next transition is a fresh `review.start` (`fresh_target_ready`), its arguments end with the options: `request-context` (the absolute path of the file), then `escalate-item` and `escalate-reason`, then `lenses` (canonical lens names in 4R order) and `lenses-reason`. The binding and every other argument are unchanged. START itself reads the file again and freezes the request and the escalation.
-- Any other next transition is refused instead of being returned without the options: an existing lineage already froze its own options at START, and the other routes run no START. Rerun STATUS without the options, follow its transition, and pass them again to the STATUS that offers `review.start`.
+- Other transitions refuse these options because they do not run START. The exception is a v2 selectorless STATUS resuming the exact reviewing recovery successor: a `--lenses` and `--lenses-reason` pair that matches the successor's frozen selection and reason is accepted without changing authority. Otherwise, rerun STATUS without the options, follow its transition, and pass them again to the STATUS that offers `review.start`.
 - The options require `--contract` and `--next-transition`, and each may appear only once.
 
-Without the options, STATUS and its START vector are unchanged. Forward the options through STATUS only when `review capabilities` lists `start_options_preflight`; see "Detecting support" below.
+Omitting the options leaves the START vector unchanged. Forward the options through STATUS only when `review capabilities` lists `start_options_preflight`; see "Detecting support" below.
 
 ### 2. START freezes an independent transaction
 
@@ -147,7 +147,7 @@ Legacy v1 authority is unsupported, so `capabilities/v2.6` does not announce it:
 
 ### 3. Bound calls drive the transaction
 
-A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. The parent runs that command verbatim, with the repository as process cwd, and satisfies every later STATUS and bound capture call only with the exact tokens each returned transition names. The parent routes only from that transaction's returned `next_transition`:
+A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. Run that command verbatim with the repository as process cwd. Except for the documented [selectorless preflight after recovery](#native-recovery-for-an-explicitly-selected-lineage), use only the exact tokens from returned transitions for later STATUS and bound captures. Route only from the returned `next_transition`:
 
 | Transition | Parent action |
 | --- | --- |
@@ -190,6 +190,13 @@ recorded successor fails closed with a read-only `review inspect-authority`
 diagnostic. Run that diagnostic with the requested repository as process cwd;
 do not invent a new successor to bypass the conflict.
 
+After successful `review recover` into `reviewing` under the derived successor name,
+run the same selectorless v2 STATUS preflight from the same worktree:
+`gentle-ai review status --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition`,
+retaining the target selectors. This documented entry binds the
+successor in that slot; follow only its returned `next_transition`. STATUS
+still bound to the predecessor cannot offer another recovery.
+
 When strict compact-state decoding and historical compatibility both fail,
 `CompactStore.Load` reports the lineage and both failure causes, retaining the
 strict error as its wrapped cause. The record remains rejected and unchanged;
@@ -224,7 +231,7 @@ The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go deri
 
 The in-process Claude Code reviewer uses the saved model and effort for each role (`risk`, `readability`, `reliability`, `resilience`, `refuter`, and `validator`). It passes `--effort` only for a non-default effort supported by the assigned model, using the same compatibility rule as generated `review-*` subagents. Default effort and legacy model-only assignments omit the flag. Missing or malformed assignments preserve native defaults or a valid legacy model fallback. The reviewer keeps `--setting-sources ""`; it does not inherit user or project effort settings.
 
-Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. A result echoes the exact `subject_hash`, reports completed inspection of the full manifest, and supplies structured findings/evidence. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
+Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. The reviewer reports completed inspection of the full manifest and supplies structured findings and evidence. It does not need to copy `subject_hash` into its output. A submitting host passes the provider-issued `--subject-hash` from the collect binding unchanged. Capture refuses an empty, malformed, or different host hash and ignores the echo when the host hash matches. When `capture-result --agent` launches the reviewer itself, the invocation already binds the slot, so a missing or mismatched echo cannot block capture. External `--input` (including stdin) without a host hash uses the provider-derived subject; any echo must match that slot's current or legacy v1 subject. An echo mismatch does not consume the slot: re-run the lens and capture the corrected result on the same lineage. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
 
 Reviewers inspect only provider-bound immutable trees. They never inspect the live worktree, index, `HEAD`, or another revision, and candidate bytes must not move through `/tmp`, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. The one exception is the Codex refuter probe below: Go itself writes the frozen candidate tree into a fresh scratch copy it creates and removes.
 
