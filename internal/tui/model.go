@@ -1327,8 +1327,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.UpdateResults = nil
 		m.UpdateCheckDone = false
-		starCmd := m.starRecordOperation()
-		return m, tea.Batch(m.Init(), starCmd)
+		if msg.Err == nil {
+			return m, tea.Batch(m.Init(), m.starRecordOperation())
+		}
+		return m, m.Init()
 	case SyncDoneMsg:
 		if m.Screen != ScreenSync && m.Screen != ScreenUpgradeSync {
 			return m, nil
@@ -1340,8 +1342,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.HasSyncRun = true
 		m.PendingSyncOverrides = nil
 		m.refreshCodexManagedServiceTier(msg.CodexServiceTier)
-		starCmd := m.starRecordOperation()
-		return m, starCmd
+		if msg.Err == nil {
+			return m, m.starRecordOperation()
+		}
+		return m, nil
 	case UninstallDoneMsg:
 		if m.Screen != ScreenUninstallConfirm {
 			return m, nil
@@ -1352,8 +1356,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SyncCleanInstallFiles = msg.SyncFiles
 		m.SyncCleanInstallErr = msg.SyncErr
 		m.setScreen(ScreenUninstallResult)
-		starCmd := m.starRecordOperation()
-		return m, starCmd
+		if msg.Err == nil {
+			return m, m.starRecordOperation()
+		}
+		return m, nil
 	case UpgradePhaseCompletedMsg:
 		if m.Screen != ScreenUpgradeSync {
 			return m, nil
@@ -1370,7 +1376,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.UpdateResults = nil
 		m.UpdateCheckDone = false
 		return m, m.Init()
-	case StarIdleElapsedMsg, StarVisibleTimeoutMsg, StarGhDoneMsg:
+	case StarIdleElapsedMsg, StarVisibleTimeoutMsg, StarGhDoneMsg, StarCheckDoneMsg, StarThanksExpiredMsg:
 		if cmd := m.starHandleMsg(msg); cmd != nil {
 			return m, cmd
 		}
@@ -1541,9 +1547,14 @@ func (m Model) findProgressItem(stepID string) int {
 	return -1
 }
 
+// View renders the active screen and, when the star prompt footer is
+// visible, appends it as the last line after reserving one row for it.
 func (m Model) View() string {
 	out := m.viewScreen()
 	if line := m.starFooterLine(); line != "" {
+		screen := m
+		screen.Height = max(0, m.Height-1)
+		out = screen.viewScreen()
 		out += "\n" + line
 	}
 	return out

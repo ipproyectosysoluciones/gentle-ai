@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -30,10 +31,19 @@ type StarVisibleTimeoutMsg struct{}
 
 // StarGhDoneMsg carries the outcome of the Ctrl+G star action.
 type StarGhDoneMsg struct {
-	Starred bool
-	Opened  bool
-	Err     error
+	Starred    bool
+	Opened     bool
+	Err        error
+	FailedURLs []string
 }
+
+// StarCheckDoneMsg carries the outcome of the async direct-star eligibility check.
+type StarCheckDoneMsg struct {
+	Outcome starprompt.Outcome
+}
+
+// StarThanksExpiredMsg fires when the thanks line must clear.
+type StarThanksExpiredMsg struct{}
 
 // Injectable seams for tests.
 var (
@@ -45,6 +55,9 @@ var (
 	}
 	starVisibleTick = func(d time.Duration) tea.Cmd {
 		return tea.Tick(d, func(time.Time) tea.Msg { return StarVisibleTimeoutMsg{} })
+	}
+	starThanksTick = func(d time.Duration) tea.Cmd {
+		return tea.Tick(d, func(time.Time) tea.Msg { return StarThanksExpiredMsg{} })
 	}
 	starStateDirFn = func() string {
 		home, err := os.UserHomeDir()
@@ -73,6 +86,11 @@ func (m *Model) starRecordOperation() tea.Cmd {
 	if !m.StarLoaded {
 		m.starInit()
 		m.StarLoaded = true
+	}
+	if m.StarUnusable {
+		// A broken state file must not be rewritten (a malformed file may carry a
+		// dismissal that must survive) and must never arm a new offer.
+		return nil
 	}
 	m.StarState.CompletedOps++
 	if err := starprompt.Write(starStateDirFn(), m.StarState); err != nil {
@@ -105,11 +123,17 @@ func (m Model) starObserveKey(keyStr string) (Model, tea.Cmd, bool) {
 	if m.StarVisible {
 		switch keyStr {
 		case "ctrl+g":
+			m.StarVisible = false
+			m.StarOffered = true
 			return m, m.starStarNow(), true
 		case "alt+d":
 			m.starDismiss()
 			return m, nil, true
 		}
+		// Any key other than the star and dismiss chords hides the offer and marks
+		// it offered for this session; the key itself still passes through.
+		m.StarVisible = false
+		m.StarOffered = true
 	}
 	// Plain activity only records the timestamp; the pending idle tick sees it
 	// via StarLastKey and re-arms itself, so no key ever needs a returned cmd.
@@ -134,15 +158,17 @@ func (m Model) starStarNow() tea.Cmd {
 		}
 		var firstErr error
 		opened := true
+		var failed []string
 		for _, url := range append([]string{starprompt.RepositoryURL}, extraStarURLs...) {
 			if err := tuiOpenBrowserFn(url); err != nil {
 				opened = false
+				failed = append(failed, url)
 				if firstErr == nil {
 					firstErr = err
 				}
 			}
 		}
-		return StarGhDoneMsg{Opened: opened, Err: firstErr}
+		return StarGhDoneMsg{Opened: opened, Err: firstErr, FailedURLs: failed}
 	}
 }
 
@@ -181,18 +207,7 @@ func (m *Model) starHandleMsg(msg tea.Msg) tea.Cmd {
 		// browser-only default never touches credentials. An already-starred
 		// account or an ambiguous check marks the offer done for this session.
 		if m.StarState.DirectStar {
-			outcome := starprompt.GhStarred(context.Background(), starGhRunner, starGhPath, starprompt.Repositories)
-			switch outcome {
-			case starprompt.OutcomeYes:
-				m.StarOffered = true
-				m.StarWaitingIdle = false
-				m.starDismiss()
-				return nil
-			case starprompt.OutcomeUnknown:
-				m.StarOffered = true
-				m.StarWaitingIdle = false
-				return nil
-			}
+			return starCheckGhCmd()
 		}
 		m.StarWaitingIdle = false
 		m.StarVisible = true
@@ -207,7 +222,7 @@ func (m *Model) starHandleMsg(msg tea.Msg) tea.Cmd {
 		if msg.Starred {
 			m.starDismiss()
 			m.StarThanksAt = starTimeNow()
-			return nil
+			return starThanksTick(5 * time.Second)
 		}
 		if msg.Opened {
 			m.starDismiss()
@@ -215,10 +230,42 @@ func (m *Model) starHandleMsg(msg tea.Msg) tea.Cmd {
 		}
 		// Neither starring nor the browser worked: surface the URL manually and
 		// keep the session eligible (a real answer is still possible).
-		m.StarManualURL = starprompt.RepositoryURL
+		if len(msg.FailedURLs) > 0 {
+			m.StarManualURL = strings.Join(msg.FailedURLs, ", ")
+		} else {
+			m.StarManualURL = starprompt.RepositoryURL
+		}
+		return nil
+	case StarCheckDoneMsg:
+		m.StarWaitingIdle = false
+		switch msg.Outcome {
+		case starprompt.OutcomeYes:
+			m.StarOffered = true
+			m.starDismiss()
+		case starprompt.OutcomeUnknown:
+			m.StarOffered = true
+		case starprompt.OutcomeNo:
+			// Re-check the idle window before offering: a keypress may have landed
+			// while the check was in flight.
+			if starTimeNow().Sub(m.StarLastKey) < starprompt.IdleDelay {
+				return starIdleTick(starprompt.IdleDelay - starTimeNow().Sub(m.StarLastKey))
+			}
+			m.StarVisible = true
+			return starVisibleTick(starprompt.VisibleTimeout)
+		}
+		return nil
+	case StarThanksExpiredMsg:
+		m.StarThanksAt = time.Time{}
 		return nil
 	}
 	return nil
+}
+
+// starCheckGhCmd schedules the async direct-star eligibility check.
+func starCheckGhCmd() tea.Cmd {
+	return func() tea.Msg {
+		return StarCheckDoneMsg{Outcome: starprompt.GhStarred(context.Background(), starGhRunner, starGhPath, starprompt.Repositories)}
+	}
 }
 
 // starFooterLine renders the non-blocking footer line for the current star
