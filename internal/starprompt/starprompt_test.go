@@ -54,24 +54,34 @@ func TestReadValidRoundTrip(t *testing.T) {
 }
 
 func TestShouldOffer(t *testing.T) {
-	base := State{Schema: Schema, CompletedOps: Threshold}
 	cases := []struct {
 		name                       string
 		s                          State
 		unusable, offered, running bool
 		want                       bool
 	}{
-		{"silent through threshold", base, false, false, false, false},
-		{"eligible after threshold", func() State { s := base; s.CompletedOps = Threshold + 1; return s }(), false, false, false, true},
-		{"dismissed never", func() State { s := base; s.CompletedOps = 50; s.Dismissed = true; return s }(), false, false, false, false},
-		{"unusable never", func() State { s := base; s.CompletedOps = 50; return s }(), true, false, false, false},
-		{"already offered", func() State { s := base; s.CompletedOps = 50; return s }(), false, true, false, false},
-		{"operation running", func() State { s := base; s.CompletedOps = 50; return s }(), false, false, true, false},
+		{"silent before the fifth", State{Schema: Schema, CompletedOps: Threshold - 1}, false, false, false, false},
+		// Issue #5969: the offer may appear after the fifth successful completion.
+		{"eligible at the fifth", State{Schema: Schema, CompletedOps: Threshold}, false, false, false, true},
+		{"dismissed never", func() State { s := State{Schema: Schema, CompletedOps: 50}; s.Dismissed = true; return s }(), false, false, false, false},
+		{"unusable never", func() State { s := State{Schema: Schema, CompletedOps: 50}; return s }(), true, false, false, false},
+		{"already offered", func() State { s := State{Schema: Schema, CompletedOps: 50}; return s }(), false, true, false, false},
+		{"operation running", func() State { s := State{Schema: Schema, CompletedOps: 50}; return s }(), false, false, true, false},
 	}
 	for _, tc := range cases {
 		if got := ShouldOffer(tc.s, tc.unusable, tc.offered, tc.running); got != tc.want {
 			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestGhStarPutNotFoundIsAmbiguousNotSuccess(t *testing.T) {
+	ctx := context.Background()
+	notFound := func(ctx context.Context, ghPath string, args ...string) (int, string, error) {
+		return 1, "gh: Not Found (HTTP 404)", assertErr{}
+	}
+	if got := GhStar(ctx, notFound, "gh", []string{"x/y"}); got != OutcomeUnknown {
+		t.Errorf("star PUT answering HTTP 404 must be ambiguous so the browser fallback runs, got %v", got)
 	}
 }
 

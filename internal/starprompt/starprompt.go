@@ -35,7 +35,7 @@ var Repositories = []string{"Gentleman-Programming/gentle-ai", "Gentleman-Progra
 const RepositoryURL = "https://github.com/" + Repository
 
 // Threshold is how many successful completed operations stay silent; the offer
-// may appear from Threshold+1 on (t3code parity).
+// may appear from the Thresholdth successful completion on (issue #5969).
 const Threshold = 5
 
 // IdleDelay is how long the TUI must see no keypress before offering.
@@ -118,7 +118,7 @@ func ShouldOffer(s State, unusable, offeredThisSession, operationRunning bool) b
 	if unusable || s.Dismissed || offeredThisSession || operationRunning {
 		return false
 	}
-	return s.CompletedOps > Threshold
+	return s.CompletedOps >= Threshold
 }
 
 // Outcome classifies a gh result. Unknown means ambiguity: the TUI must fall
@@ -183,13 +183,15 @@ func GhStarred(ctx context.Context, run GhRunner, ghPath string, repositories []
 // an idempotent no-op when already starred.
 func GhStar(ctx context.Context, run GhRunner, ghPath string, repositories []string) Outcome {
 	for _, repository := range repositories {
-		code, stderr, err := run(ctx, ghPath, "api", "--method", "PUT", "user/starred/"+repository)
+		code, _, err := run(ctx, ghPath, "api", "--method", "PUT", "user/starred/"+repository)
 		if err != nil && code == -1 {
 			return OutcomeUnknown
 		}
-		if code == 0 || strings.Contains(stderr, "HTTP 404") {
+		if code == 0 {
 			continue
 		}
+		// A failed PUT (including an HTTP 404) is ambiguous: the TUI must fall
+		// back to the browser instead of claiming success.
 		return OutcomeUnknown
 	}
 	return OutcomeYes
