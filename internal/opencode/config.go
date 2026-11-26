@@ -363,7 +363,7 @@ func legacyConfiguredAssignments(root map[string]any) map[string]AssignmentPrese
 			// Presence is the pre-write evidence that an existing assignment was
 			// cleared. Restoration may exempt a managed definition when its active
 			// mode intentionally generates agents without model fields.
-			assignments[key] = AssignmentPresence{Present: true, Cleared: true, Managed: looksLikeManagedOpenCodeAgent(def)}
+			assignments[key] = AssignmentPresence{Present: true, Cleared: true, Managed: looksLikeManagedOpenCodeAgent(key, def)}
 			continue
 		}
 		assignment, ok := model.ParseModelReference(modelSpec)
@@ -379,16 +379,24 @@ func legacyConfiguredAssignments(root map[string]any) map[string]AssignmentPrese
 	return assignments
 }
 
-func looksLikeManagedOpenCodeAgent(def map[string]any) bool {
+// looksLikeManagedOpenCodeAgent reports whether the given OpenCode agent
+// definition belongs to the managed Gentle AI agent set.
+func looksLikeManagedOpenCodeAgent(name string, def map[string]any) bool {
+	if def == nil {
+		return false
+	}
 	hidden, _ := def["hidden"].(bool)
-	if !hidden {
-		return false
+	if hidden {
+		if _, ok := def["prompt"].(string); !ok {
+			return false
+		}
+		_, ok := def["permission"].(map[string]any)
+		return ok
 	}
-	if _, ok := def["prompt"].(string); !ok {
-		return false
-	}
-	_, ok := def["permission"].(map[string]any)
-	return ok
+	// OpenCode V2 renders subagents with `hidden: false`; the gentle-ai-
+	// prefix is the ownership discriminator for that shape, while orchestrator
+	// entries with `hidden: false` stay user-authored.
+	return strings.HasPrefix(name, "gentle-ai-")
 }
 
 // managedConfigPriority ranks explicit markers above the legacy shape heuristic.
@@ -411,7 +419,7 @@ func managedConfigPriority(path string) int {
 	}
 	for _, key := range managedOpenCodeAgentKeys() {
 		def, _ := agents[key].(map[string]any)
-		if looksLikeManagedOpenCodeAgent(def) {
+		if looksLikeManagedOpenCodeAgent(key, def) {
 			return 1
 		}
 	}

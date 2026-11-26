@@ -15,6 +15,8 @@ func TestManagedConfigPriorityAfterOpenCodeAgentMigration(t *testing.T) {
 		{"migrated parity only", `{"agent":{"gentle-ai-worker":{"hidden":true,"prompt":"worker","permission":{"task":"deny"}}}}`, 1},
 		{"fresh review lens", `{"agent":{"review-risk":{"hidden":true,"prompt":"risk","permission":{"write":"deny"}}}}`, 1},
 		{"unmanaged", `{"agent":{"general":{"hidden":true,"prompt":"custom","permission":{}}}}`, 0},
+		{"hidden false delegation subagent", `{"agent":{"gentle-ai-worker":{"hidden":false,"prompt":"worker","permission":{"task":"deny"}}}}`, 1},
+		{"hidden false user orchestrator", `{"agent":{"gentle-orchestrator":{"hidden":false,"prompt":"my own orchestrator","permission":{"task":"allow"}}}}`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "opencode.json")
